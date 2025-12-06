@@ -1,4 +1,5 @@
-import React, { ReactNode } from 'react';
+
+import React, { ReactNode, useState } from 'react';
 
 export const GradientCard = ({ children, className = "", onClick }: { children?: ReactNode, className?: string, onClick?: () => void }) => (
   <div 
@@ -104,3 +105,83 @@ export const Input = (props: React.InputHTMLAttributes<HTMLInputElement>) => (
     className={`w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl px-5 py-4 text-slate-700 dark:text-slate-200 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-blue-200 dark:focus:ring-blue-800 focus:border-blue-400 dark:focus:border-blue-500 transition-all font-normal ${props.className}`}
   />
 );
+
+export const FeedbackButtons = ({ 
+  onRate, 
+  currentRating 
+}: { 
+  onRate: (rating: 'good' | 'bad', comment?: string) => void,
+  currentRating?: 'good' | 'bad'
+}) => {
+  const [comment, setComment] = useState('');
+  const [showComment, setShowComment] = useState(false);
+
+  return (
+    <div className="mt-3 border-t border-slate-100 dark:border-slate-600 pt-2">
+      <div className="flex items-center justify-between">
+        <span className="text-[10px] uppercase text-slate-400 font-bold tracking-wider">Was this helpful?</span>
+        <div className="flex gap-2">
+          <button 
+            onClick={() => { onRate('good', comment); setShowComment(false); }}
+            className={`p-1.5 rounded-lg transition-colors ${currentRating === 'good' ? 'bg-green-100 text-green-600 dark:bg-green-900 dark:text-green-300' : 'text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700'}`}
+          >
+            <span className="material-icons-round text-base">thumb_up</span>
+          </button>
+          <button 
+            onClick={() => setShowComment(true)}
+            className={`p-1.5 rounded-lg transition-colors ${currentRating === 'bad' ? 'bg-red-100 text-red-600 dark:bg-red-900 dark:text-red-300' : 'text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700'}`}
+          >
+             <span className="material-icons-round text-base">thumb_down</span>
+          </button>
+        </div>
+      </div>
+      {showComment && (
+        <div className="mt-2 animate-fade-in">
+           <input 
+             type="text" 
+             placeholder="Why wasn't this helpful?"
+             className="w-full text-xs bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-600 rounded-lg p-2 mb-2 focus:outline-none"
+             value={comment}
+             onChange={(e) => setComment(e.target.value)}
+           />
+           <Button 
+             variant="danger" 
+             className="w-full py-1 text-xs" 
+             onClick={() => { onRate('bad', comment); setShowComment(false); }}
+           >
+             Submit Feedback
+           </Button>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export const ComparisonView = ({ 
+  original, 
+  generated 
+}: { 
+  original: string, 
+  generated: string 
+}) => {
+  return (
+    <div className="relative w-full overflow-hidden rounded-2xl bg-slate-900 shadow-2xl mt-8">
+       <div className="absolute top-4 left-0 right-0 z-10 flex justify-center">
+          <span className="bg-black/50 backdrop-blur text-white text-xs font-bold px-3 py-1 rounded-full border border-white/20 uppercase tracking-widest">
+            Advanced Nano Brain Comparison
+          </span>
+       </div>
+       <div className="grid grid-cols-2 h-[400px]">
+          <div className="relative border-r border-white/10 group">
+             <img src={original} alt="Original" className="w-full h-full object-contain bg-[#FAFAFA] dark:bg-[#0B1120]" />
+             <div className="absolute bottom-4 left-4 bg-slate-900/80 text-white text-xs px-2 py-1 rounded">Original</div>
+          </div>
+          <div className="relative">
+             <img src={generated} alt="AI Variant" className="w-full h-full object-contain bg-[#FAFAFA] dark:bg-[#0B1120]" />
+             <div className="absolute bottom-4 right-4 bg-purple-600 text-white text-xs px-2 py-1 rounded shadow-glow">AI-Optimized</div>
+             <div className="absolute inset-0 pointer-events-none bg-gradient-to-t from-purple-500/10 to-transparent"></div>
+          </div>
+       </div>
+    </div>
+  );
+};

@@ -1,8 +1,9 @@
+
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Screen, DesignToken, ImageSize, Annotation, ChatMessage, ReviewSession, UserProfile } from './types';
+import { Screen, DesignToken, ImageSize, Annotation, ChatMessage, ReviewSession, UserProfile, UserFeedback } from './types';
 import { Sidebar } from './components/Sidebar';
-import { ModernCard, Button, Input } from './components/UIComponents';
-import { analyzeDesignToken, generateDesignVariant, analyzeImage, getQuickSuggestion, createChatSession } from './services/geminiService';
+import { ModernCard, Button, Input, FeedbackButtons, ComparisonView } from './components/UIComponents';
+import { analyzeDesignToken, generateDesignVariant, analyzeImage, getQuickSuggestion, createChatSession, generateAdvancedVariant } from './services/geminiService';
 import { LiveSessionManager } from './services/liveAudio';
 import { Chat, GenerateContentResponse } from "@google/genai";
 
@@ -55,9 +56,13 @@ const App = () => {
   const [darkMode, setDarkMode] = useState(false);
   const [voiceName, setVoiceName] = useState('Fenrir'); // Default voice
   
-  // History State
+  // History & Memory State
   const [sessions, setSessions] = useState<ReviewSession[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  const [userFeedbackHistory, setUserFeedbackHistory] = useState<UserFeedback[]>(() => {
+    const saved = localStorage.getItem('aura_user_feedback');
+    return saved ? JSON.parse(saved) : [];
+  });
 
   // Chat State
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
@@ -100,6 +105,11 @@ const App = () => {
   useEffect(() => {
     localStorage.setItem('aura_history', JSON.stringify(sessions));
   }, [sessions]);
+
+  // Save feedback history
+  useEffect(() => {
+    localStorage.setItem('aura_user_feedback', JSON.stringify(userFeedbackHistory));
+  }, [userFeedbackHistory]);
 
   // Clean up live session on unmount
   useEffect(() => {
@@ -321,7 +331,8 @@ const App = () => {
     setIsAnalyzing(true);
     setCurrentSessionId(sessionId);
     
-    const { text, annotations } = await analyzeImage(file);
+    // Pass prior memory/feedback to analysis
+    const { text, annotations } = await analyzeImage(file, userFeedbackHistory);
     setAnnotations(annotations);
     const initialHistory = startChat(text, text); 
 
@@ -451,6 +462,57 @@ const App = () => {
     setGeneratedImage(variant);
     setAnnotations([]); 
     setIsAnalyzing(false);
+  };
+
+  const handleAdvancedVariant = async () => {
+    if (!previewUrl) return;
+    setIsAnalyzing(true);
+
+    try {
+        let base64Data = "";
+        if (previewUrl.startsWith('blob:')) {
+           const response = await fetch(previewUrl);
+           const blob = await response.blob();
+           base64Data = await fileToBase64(blob);
+        } else {
+           base64Data = previewUrl;
+        }
+
+        // Filter annotations that are NOT marked as 'bad' (so neutral + good)
+        // This guides the "Nano Brain" to only apply trusted improvements
+        const activeImprovements = annotations
+            .filter(a => a.rating !== 'bad')
+            .map(a => a.suggestion);
+
+        const variant = await generateAdvancedVariant(base64Data, activeImprovements);
+        
+        if (variant) {
+            setGeneratedImage(variant);
+            // We don't clear annotations here so user can compare original issues
+        }
+    } catch (e) {
+        console.error("Advanced generation failed", e);
+    } finally {
+        setIsAnalyzing(false);
+    }
+  };
+
+  const handleFeedback = (index: number, rating: 'good' | 'bad', comment?: string) => {
+    const updatedAnnotations = [...annotations];
+    updatedAnnotations[index].rating = rating;
+    updatedAnnotations[index].userFeedback = comment;
+    setAnnotations(updatedAnnotations);
+
+    // Persist to Memory Layer
+    const newFeedback: UserFeedback = {
+        id: uuid(),
+        annotationLabel: updatedAnnotations[index].label,
+        suggestion: updatedAnnotations[index].suggestion,
+        rating: rating,
+        userComment: comment,
+        timestamp: Date.now()
+    };
+    setUserFeedbackHistory(prev => [...prev, newFeedback]);
   };
 
   const handleExportReport = async () => {
@@ -857,6 +919,8 @@ const App = () => {
                    if (confirm("Are you sure you want to clear all history?")) {
                       localStorage.removeItem('aura_history');
                       setSessions([]);
+                      localStorage.removeItem('aura_user_feedback');
+                      setUserFeedbackHistory([]);
                    }
                 }}
               >
@@ -1005,36 +1069,46 @@ const App = () => {
 
          <div className="flex-1 flex items-center justify-center overflow-auto p-12 relative z-10">
             {(generatedImage || previewUrl) ? (
-               <div className="relative inline-block shadow-2xl shadow-slate-200/50 dark:shadow-none rounded-2xl border-[6px] border-white dark:border-slate-700 bg-white dark:bg-slate-700 transition-all duration-500">
-                   <img 
-                     src={generatedImage || previewUrl || ""} 
-                     alt="Design Preview" 
-                     className="max-w-full max-h-[70vh] block rounded-lg" 
-                   />
-                   {generatedImage && (
-                     <div className="absolute bottom-6 right-6 bg-white/80 text-slate-900 text-xs font-medium px-4 py-2 rounded-full backdrop-blur-md pointer-events-none shadow-sm border border-white">Generated</div>
-                   )}
-                   {/* Annotations Overlay */}
-                   {annotations.map((ann, idx) => (
-                     <div
-                       key={idx}
-                       className="absolute border-2 border-pink-500 rounded-lg group cursor-pointer hover:bg-pink-500/5 transition-all"
-                       style={{
-                         top: `${ann.box_2d[0]}%`,
-                         left: `${ann.box_2d[1]}%`,
-                         height: `${ann.box_2d[2] - ann.box_2d[0]}%`,
-                         width: `${ann.box_2d[3] - ann.box_2d[1]}%`
-                       }}
-                     >
-                       <div className="absolute -top-3 -left-3 w-6 h-6 bg-pink-500 text-white rounded-full flex items-center justify-center text-xs font-bold shadow-lg scale-0 group-hover:scale-100 transition-transform duration-300">
-                         {idx + 1}
-                       </div>
-                       <div className="absolute opacity-0 group-hover:opacity-100 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 text-xs p-4 rounded-2xl shadow-xl border border-slate-100 dark:border-slate-700 -bottom-2 left-1/2 transform -translate-x-1/2 translate-y-full w-56 z-20 transition-all duration-300 pointer-events-none">
-                          <p className="font-bold mb-1 text-pink-500 uppercase tracking-wider text-[10px]">{ann.label}</p>
-                          <p className="leading-relaxed font-normal">{ann.suggestion}</p>
-                       </div>
-                     </div>
-                   ))}
+               <div className="w-full max-w-4xl">
+                  {generatedImage && previewUrl ? (
+                    <ComparisonView original={previewUrl} generated={generatedImage} />
+                  ) : (
+                    <div className="relative inline-block shadow-2xl shadow-slate-200/50 dark:shadow-none rounded-2xl border-[6px] border-white dark:border-slate-700 bg-white dark:bg-slate-700 transition-all duration-500 mx-auto block w-fit">
+                       <img 
+                         src={generatedImage || previewUrl || ""} 
+                         alt="Design Preview" 
+                         className="max-w-full max-h-[70vh] block rounded-lg" 
+                       />
+                       {generatedImage && (
+                         <div className="absolute bottom-6 right-6 bg-white/80 text-slate-900 text-xs font-medium px-4 py-2 rounded-full backdrop-blur-md pointer-events-none shadow-sm border border-white">Generated</div>
+                       )}
+                       {/* Annotations Overlay */}
+                       {annotations.map((ann, idx) => (
+                         <div
+                           key={idx}
+                           className="absolute border-2 border-pink-500 rounded-lg group cursor-pointer hover:bg-pink-500/5 transition-all"
+                           style={{
+                             top: `${ann.box_2d[0]}%`,
+                             left: `${ann.box_2d[1]}%`,
+                             height: `${ann.box_2d[2] - ann.box_2d[0]}%`,
+                             width: `${ann.box_2d[3] - ann.box_2d[1]}%`
+                           }}
+                         >
+                           <div className="absolute -top-3 -left-3 w-6 h-6 bg-pink-500 text-white rounded-full flex items-center justify-center text-xs font-bold shadow-lg scale-0 group-hover:scale-100 transition-transform duration-300">
+                             {idx + 1}
+                           </div>
+                           <div className="absolute opacity-0 group-hover:opacity-100 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 text-xs p-4 rounded-2xl shadow-xl border border-slate-100 dark:border-slate-700 -bottom-2 left-1/2 transform -translate-x-1/2 translate-y-full w-64 z-20 transition-all duration-300 pointer-events-auto">
+                              <p className="font-bold mb-1 text-pink-500 uppercase tracking-wider text-[10px]">{ann.label} <span className="opacity-50 ml-1">{ann.confidenceScore ? `(${ann.confidenceScore}%)` : ''}</span></p>
+                              <p className="leading-relaxed font-normal">{ann.suggestion}</p>
+                              <FeedbackButtons 
+                                onRate={(rating, comment) => handleFeedback(idx, rating, comment)}
+                                currentRating={ann.rating} 
+                              />
+                           </div>
+                         </div>
+                       ))}
+                   </div>
+                  )}
                </div>
             ) : tokenInput ? (
               <div className="w-[600px] min-h-[400px] bg-white dark:bg-slate-800 rounded-[32px] shadow-soft border border-slate-100 dark:border-slate-700 p-10 relative">
@@ -1059,7 +1133,7 @@ const App = () => {
                <div className="w-2 h-2 rounded-full bg-green-400"></div>
                <span className="text-xs text-slate-500 dark:text-slate-400 font-bold uppercase tracking-wider">Gemini 3 Pro Active</span>
             </div>
-            <Button variant="primary" icon="auto_fix_high" onClick={handleGenerateVariant} disabled={isAnalyzing}>
+            <Button variant="primary" icon="auto_fix_high" onClick={handleAdvancedVariant} disabled={isAnalyzing || !previewUrl}>
                Generate Variant
             </Button>
          </div>

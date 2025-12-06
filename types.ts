@@ -1,3 +1,4 @@
+
 export enum Screen {
   DASHBOARD = 'DASHBOARD',
   TOKEN_INPUT = 'TOKEN_INPUT',
@@ -39,6 +40,18 @@ export interface Annotation {
   label: string;
   suggestion: string;
   box_2d: number[]; // [ymin, xmin, ymax, xmax] in percentages (0-100)
+  confidenceScore?: number; // 0-100
+  rating?: 'good' | 'bad';
+  userFeedback?: string;
+}
+
+export interface UserFeedback {
+  id: string;
+  annotationLabel: string;
+  suggestion: string;
+  rating: 'good' | 'bad';
+  timestamp: number;
+  userComment?: string;
 }
 
 export interface ReviewSession {
