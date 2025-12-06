@@ -1,0 +1,8 @@
+{
+  "name": "Aura Design Assistant",
+  "description": "A sleek, AI-powered design companion for analyzing Figma tokens and generating visual improvements using Gemini 3 Pro and Live API.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
