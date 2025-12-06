@@ -97,8 +97,12 @@ export const generateDesignVariant = async (prompt: string, size: ImageSize = Im
       }
     }
     return null;
-  } catch (error) {
+  } catch (error: any) {
     console.error("Image gen error:", error);
+    // Re-throw permission errors to trigger key selection in UI
+    if (error.status === 403 || error.message?.includes("PERMISSION_DENIED")) {
+        throw error;
+    }
     return null;
   }
 };
@@ -157,8 +161,12 @@ export const generateAdvancedVariant = async (
     }
     return null;
 
-  } catch (error) {
+  } catch (error: any) {
     console.error("Advanced variant gen error:", error);
+    // Re-throw permission errors to trigger key selection in UI
+    if (error.status === 403 || error.message?.includes("PERMISSION_DENIED")) {
+        throw error;
+    }
     return null;
   }
 };

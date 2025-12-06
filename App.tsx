@@ -70,6 +70,7 @@ const App = () => {
   const chatSessionRef = useRef<Chat | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const pdfInputRef = useRef<HTMLInputElement>(null);
+  const chatImageInputRef = useRef<HTMLInputElement>(null);
   
   // Live API Manager Ref
   const liveManager = useRef<LiveSessionManager | null>(null);
@@ -396,6 +397,15 @@ const App = () => {
         await startImageAnalysis(file);
     }
   };
+  
+  const handleChatImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      await startImageAnalysis(file);
+    }
+    // Reset
+    if (chatImageInputRef.current) chatImageInputRef.current.value = '';
+  };
 
   const loadSession = (session: ReviewSession) => {
     setCurrentSessionId(session.id);
@@ -453,47 +463,6 @@ const App = () => {
              await liveManager.current.sendImage(base64Data);
           }
       }
-    }
-  };
-
-  const handleGenerateVariant = async () => {
-    setIsAnalyzing(true);
-    const variant = await generateDesignVariant("Modern SaaS dashboard, clean typography, soft pink and blue gradients", ImageSize.K2);
-    setGeneratedImage(variant);
-    setAnnotations([]); 
-    setIsAnalyzing(false);
-  };
-
-  const handleAdvancedVariant = async () => {
-    if (!previewUrl) return;
-    setIsAnalyzing(true);
-
-    try {
-        let base64Data = "";
-        if (previewUrl.startsWith('blob:')) {
-           const response = await fetch(previewUrl);
-           const blob = await response.blob();
-           base64Data = await fileToBase64(blob);
-        } else {
-           base64Data = previewUrl;
-        }
-
-        // Filter annotations that are NOT marked as 'bad' (so neutral + good)
-        // This guides the "Nano Brain" to only apply trusted improvements
-        const activeImprovements = annotations
-            .filter(a => a.rating !== 'bad')
-            .map(a => a.suggestion);
-
-        const variant = await generateAdvancedVariant(base64Data, activeImprovements);
-        
-        if (variant) {
-            setGeneratedImage(variant);
-            // We don't clear annotations here so user can compare original issues
-        }
-    } catch (e) {
-        console.error("Advanced generation failed", e);
-    } finally {
-        setIsAnalyzing(false);
     }
   };
 
@@ -1013,7 +982,7 @@ const App = () => {
               <button 
                 onClick={toggleLiveSession} 
                 className={`
-                  w-14 h-14 rounded-2xl flex items-center justify-center transition-all duration-500
+                  w-14 h-14 rounded-2xl flex items-center justify-center transition-all duration-500 flex-shrink-0
                   ${isLiveConnected 
                     ? "bg-pink-50 dark:bg-pink-900/20 text-pink-500 border border-pink-200 dark:border-pink-800 shadow-glow" 
                     : "bg-slate-50 dark:bg-slate-800 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 border border-transparent"}
@@ -1023,6 +992,15 @@ const App = () => {
                  <span className={`material-icons-round text-2xl ${isLiveConnected ? 'animate-pulse' : ''}`}>
                    {isLiveConnected ? 'graphic_eq' : 'mic'}
                  </span>
+              </button>
+              
+              {/* Image Upload for Chat Review */}
+              <button
+                onClick={() => chatImageInputRef.current?.click()}
+                className="w-14 h-14 rounded-2xl flex items-center justify-center bg-slate-50 dark:bg-slate-800 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 transition-all flex-shrink-0 border border-transparent"
+                title="Upload Image for Review"
+              >
+                 <span className="material-icons-round text-2xl">add_photo_alternate</span>
               </button>
 
               <div className="flex-1 relative">
@@ -1067,65 +1045,68 @@ const App = () => {
             <button className="w-8 h-8 flex items-center justify-center text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700 rounded-lg transition-colors"><span className="material-icons-round text-lg">add</span></button>
          </div>
 
-         <div className="flex-1 flex items-center justify-center overflow-auto p-12 relative z-10">
-            {(generatedImage || previewUrl) ? (
-               <div className="w-full max-w-4xl">
-                  {generatedImage && previewUrl ? (
-                    <ComparisonView original={previewUrl} generated={generatedImage} />
-                  ) : (
-                    <div className="relative inline-block shadow-2xl shadow-slate-200/50 dark:shadow-none rounded-2xl border-[6px] border-white dark:border-slate-700 bg-white dark:bg-slate-700 transition-all duration-500 mx-auto block w-fit">
-                       <img 
-                         src={generatedImage || previewUrl || ""} 
-                         alt="Design Preview" 
-                         className="max-w-full max-h-[70vh] block rounded-lg" 
-                       />
-                       {generatedImage && (
-                         <div className="absolute bottom-6 right-6 bg-white/80 text-slate-900 text-xs font-medium px-4 py-2 rounded-full backdrop-blur-md pointer-events-none shadow-sm border border-white">Generated</div>
+         {/* Image Preview Container - Updated for robust centering */}
+         <div className="flex-1 overflow-auto p-8 relative z-10 flex">
+             <div className="m-auto relative max-w-full">
+                {(generatedImage || previewUrl) ? (
+                   <div className="w-full max-w-4xl relative shadow-2xl shadow-slate-200/50 dark:shadow-none rounded-2xl border-[6px] border-white dark:border-slate-700 bg-white dark:bg-slate-700 transition-all duration-500">
+                       {generatedImage && previewUrl ? (
+                         <ComparisonView original={previewUrl} generated={generatedImage} />
+                       ) : (
+                           <>
+                             <img 
+                               src={generatedImage || previewUrl || ""} 
+                               alt="Design Preview" 
+                               className="max-w-full max-h-[80vh] block rounded-lg mx-auto" 
+                             />
+                             {generatedImage && (
+                               <div className="absolute bottom-6 right-6 bg-white/80 text-slate-900 text-xs font-medium px-4 py-2 rounded-full backdrop-blur-md pointer-events-none shadow-sm border border-white">Generated</div>
+                             )}
+                             {/* Annotations Overlay */}
+                             {annotations.map((ann, idx) => (
+                               <div
+                                 key={idx}
+                                 className="absolute border-2 border-pink-500 rounded-lg group cursor-pointer hover:bg-pink-500/5 transition-all"
+                                 style={{
+                                   top: `${ann.box_2d[0]}%`,
+                                   left: `${ann.box_2d[1]}%`,
+                                   height: `${ann.box_2d[2] - ann.box_2d[0]}%`,
+                                   width: `${ann.box_2d[3] - ann.box_2d[1]}%`
+                                 }}
+                               >
+                                 <div className="absolute -top-3 -left-3 w-6 h-6 bg-pink-500 text-white rounded-full flex items-center justify-center text-xs font-bold shadow-lg scale-0 group-hover:scale-100 transition-transform duration-300">
+                                   {idx + 1}
+                                 </div>
+                                 <div className="absolute opacity-0 group-hover:opacity-100 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 text-xs p-4 rounded-2xl shadow-xl border border-slate-100 dark:border-slate-700 -bottom-2 left-1/2 transform -translate-x-1/2 translate-y-full w-64 z-20 transition-all duration-300 pointer-events-auto">
+                                    <p className="font-bold mb-1 text-pink-500 uppercase tracking-wider text-[10px]">{ann.label} <span className="opacity-50 ml-1">{ann.confidenceScore ? `(${ann.confidenceScore}%)` : ''}</span></p>
+                                    <p className="leading-relaxed font-normal">{ann.suggestion}</p>
+                                    <FeedbackButtons 
+                                      onRate={(rating, comment) => handleFeedback(idx, rating, comment)}
+                                      currentRating={ann.rating} 
+                                    />
+                                 </div>
+                               </div>
+                             ))}
+                           </>
                        )}
-                       {/* Annotations Overlay */}
-                       {annotations.map((ann, idx) => (
-                         <div
-                           key={idx}
-                           className="absolute border-2 border-pink-500 rounded-lg group cursor-pointer hover:bg-pink-500/5 transition-all"
-                           style={{
-                             top: `${ann.box_2d[0]}%`,
-                             left: `${ann.box_2d[1]}%`,
-                             height: `${ann.box_2d[2] - ann.box_2d[0]}%`,
-                             width: `${ann.box_2d[3] - ann.box_2d[1]}%`
-                           }}
-                         >
-                           <div className="absolute -top-3 -left-3 w-6 h-6 bg-pink-500 text-white rounded-full flex items-center justify-center text-xs font-bold shadow-lg scale-0 group-hover:scale-100 transition-transform duration-300">
-                             {idx + 1}
-                           </div>
-                           <div className="absolute opacity-0 group-hover:opacity-100 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 text-xs p-4 rounded-2xl shadow-xl border border-slate-100 dark:border-slate-700 -bottom-2 left-1/2 transform -translate-x-1/2 translate-y-full w-64 z-20 transition-all duration-300 pointer-events-auto">
-                              <p className="font-bold mb-1 text-pink-500 uppercase tracking-wider text-[10px]">{ann.label} <span className="opacity-50 ml-1">{ann.confidenceScore ? `(${ann.confidenceScore}%)` : ''}</span></p>
-                              <p className="leading-relaxed font-normal">{ann.suggestion}</p>
-                              <FeedbackButtons 
-                                onRate={(rating, comment) => handleFeedback(idx, rating, comment)}
-                                currentRating={ann.rating} 
-                              />
-                           </div>
-                         </div>
-                       ))}
                    </div>
-                  )}
-               </div>
-            ) : tokenInput ? (
-              <div className="w-[600px] min-h-[400px] bg-white dark:bg-slate-800 rounded-[32px] shadow-soft border border-slate-100 dark:border-slate-700 p-10 relative">
-                 <div className="border border-dashed border-slate-200 dark:border-slate-700 h-full rounded-2xl flex items-center justify-center text-slate-300 dark:text-slate-600 flex-col gap-4">
-                    <span className="material-icons-round text-4xl opacity-50">code</span>
-                    <p className="text-sm font-normal text-slate-400">Token Interpretation View</p>
-                    <div className="max-w-xs text-[10px] font-mono text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-slate-900 p-3 rounded-xl opacity-60">
-                       {tokenInput.substring(0, 100)}...
-                    </div>
-                 </div>
-              </div>
-            ) : (
-               <div className="text-center opacity-40">
-                  <span className="material-icons-round text-6xl text-slate-300 dark:text-slate-600 mb-4">image</span>
-                  <h3 className="text-slate-500 dark:text-slate-400 font-normal">No Preview</h3>
-               </div>
-            )}
+                ) : tokenInput ? (
+                  <div className="w-[600px] min-h-[400px] bg-white dark:bg-slate-800 rounded-[32px] shadow-soft border border-slate-100 dark:border-slate-700 p-10 relative">
+                     <div className="border border-dashed border-slate-200 dark:border-slate-700 h-full rounded-2xl flex items-center justify-center text-slate-300 dark:text-slate-600 flex-col gap-4">
+                        <span className="material-icons-round text-4xl opacity-50">code</span>
+                        <p className="text-sm font-normal text-slate-400">Token Interpretation View</p>
+                        <div className="max-w-xs text-[10px] font-mono text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-slate-900 p-3 rounded-xl opacity-60">
+                           {tokenInput.substring(0, 100)}...
+                        </div>
+                     </div>
+                  </div>
+                ) : (
+                   <div className="text-center opacity-40">
+                      <span className="material-icons-round text-6xl text-slate-300 dark:text-slate-600 mb-4">image</span>
+                      <h3 className="text-slate-500 dark:text-slate-400 font-normal">No Preview</h3>
+                   </div>
+                )}
+             </div>
          </div>
          
          <div className="bg-white dark:bg-slate-900 border-t border-slate-50 dark:border-slate-800 p-6 flex justify-between items-center relative z-10">
@@ -1133,12 +1114,22 @@ const App = () => {
                <div className="w-2 h-2 rounded-full bg-green-400"></div>
                <span className="text-xs text-slate-500 dark:text-slate-400 font-bold uppercase tracking-wider">Gemini 3 Pro Active</span>
             </div>
-            <Button variant="primary" icon="auto_fix_high" onClick={handleAdvancedVariant} disabled={isAnalyzing || !previewUrl}>
-               Generate Variant
-            </Button>
+            
+            {/* Stop Analysis Button */}
+            {isAnalyzing && (
+               <Button 
+                 variant="danger" 
+                 icon="stop_circle" 
+                 onClick={() => setIsAnalyzing(false)}
+                 className="animate-pulse"
+               >
+                 Stop Analysis
+               </Button>
+            )}
          </div>
       </div>
       <input type="file" ref={pdfInputRef} className="hidden" accept="application/pdf" onChange={handlePdfUpload} />
+      <input type="file" ref={chatImageInputRef} className="hidden" accept="image/*" onChange={handleChatImageUpload} />
     </div>
   );
 
