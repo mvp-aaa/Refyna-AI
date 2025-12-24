@@ -1,3 +1,4 @@
+
 import React from 'react';
 import { Screen } from '../types';
 
@@ -11,6 +12,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentScreen, onNavigate, onP
   const navItems = [
     { id: Screen.DASHBOARD, icon: 'dashboard', label: 'Home' },
     { id: Screen.REVIEW, icon: 'rate_review', label: 'Review' },
+    { id: Screen.DOJO, icon: 'school', label: 'Design Dojo' },
     { id: Screen.HISTORY, icon: 'history', label: 'History' },
     { id: Screen.SETTINGS, icon: 'settings', label: 'Settings' },
   ];

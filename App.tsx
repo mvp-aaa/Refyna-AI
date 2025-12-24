@@ -1,30 +1,128 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Screen, DesignToken, ImageSize, Annotation, ChatMessage, ReviewSession, UserProfile, UserFeedback } from './types';
+import { Screen, DesignToken, ImageSize, Annotation, ChatMessage, ReviewSession, UserProfile, UserFeedback, QuizCategory, Question, LeaderboardEntry } from './types';
 import { Sidebar } from './components/Sidebar';
-import { ModernCard, Button, Input, FeedbackButtons, ComparisonView } from './components/UIComponents';
-import { analyzeDesignToken, generateDesignVariant, analyzeImage, getQuickSuggestion, createChatSession, generateAdvancedVariant } from './services/geminiService';
-import { LiveSessionManager } from './services/liveAudio';
+import { ModernCard, Button, Input } from './components/UIComponents';
+import { analyzeDesignToken, analyzeImage, createChatSession } from './services/geminiService';
 import { Chat, GenerateContentResponse } from "@google/genai";
 
 // Simple ID generator
 const uuid = () => Math.random().toString(36).substring(2, 15);
 
-// Helper to convert file to base64 for storage
-const fileToBase64 = (file: Blob): Promise<string> => {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result as string);
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
+// Sound Synthesizer for Quiz
+const playSound = (type: 'correct' | 'incorrect' | 'complete' | 'tick') => {
+  const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+  if (!AudioContextClass) return;
+  const ctx = new AudioContextClass();
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+  
+  const now = ctx.currentTime;
+  gain.gain.setValueAtTime(0, now);
+
+  if (type === 'correct') {
+    gain.gain.linearRampToValueAtTime(0.1, now + 0.05);
+    gain.gain.exponentialRampToValueAtTime(0.01, now + 0.4);
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(523.25, now); // C5
+    osc.frequency.exponentialRampToValueAtTime(1046.50, now + 0.1); // C6
+    osc.start(now);
+    osc.stop(now + 0.4);
+  } else if (type === 'incorrect') {
+    gain.gain.linearRampToValueAtTime(0.1, now + 0.05);
+    gain.gain.exponentialRampToValueAtTime(0.01, now + 0.3);
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(220, now); // A3
+    osc.frequency.linearRampToValueAtTime(110, now + 0.2); // A2
+    osc.start(now);
+    osc.stop(now + 0.3);
+  } else if (type === 'tick') {
+    gain.gain.setValueAtTime(0.02, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.05);
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(880, now);
+    osc.start(now);
+    osc.stop(now + 0.05);
+  } else {
+    gain.gain.linearRampToValueAtTime(0.1, now + 0.05);
+    gain.gain.exponentialRampToValueAtTime(0.01, now + 0.5);
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(440, now);
+    osc.frequency.exponentialRampToValueAtTime(880, now + 0.1);
+    osc.frequency.exponentialRampToValueAtTime(1320, now + 0.2);
+    osc.start(now);
+    osc.stop(now + 0.5);
+  }
+};
+
+const QUIZ_CATEGORIES: QuizCategory[] = [
+  { id: 'fundamentals', name: 'General Fundamentals', description: 'Typography, color theory, and whitespace.', skills: ['Visual hierarchy', 'Contrast'], difficulty: 'Beginner', icon: 'auto_awesome', color: 'blue' },
+  { id: 'fintech', name: 'Fintech Products', description: 'Trust signals, data density, and risk states.', skills: ['Information design', 'Accessibility'], difficulty: 'Intermediate', icon: 'account_balance', color: 'green' },
+  { id: 'dashboards', name: 'Data Visualization', description: 'Complex layouts and charting.', skills: ['Charts', 'Filtering'], difficulty: 'Mixed', icon: 'dashboard', color: 'purple' },
+  { id: 'mobile', name: 'Mobile App Design', description: 'iOS and Android patterns.', skills: ['Touch targets', 'Navigation'], difficulty: 'Intermediate', icon: 'smartphone', color: 'pink' },
+  { id: 'saas', name: 'SaaS Marketing', description: 'Conversion focused web design.', skills: ['Copywriting', 'Hierarchy'], difficulty: 'Mixed', icon: 'campaign', color: 'orange' },
+];
+
+const FULL_QUESTION_POOL: Record<string, Question[]> = {
+  fundamentals: Array.from({ length: 25 }, (_, i) => ({
+    id: `fund-${i}`,
+    type: 'multiple-choice',
+    text: [
+      "Which font weight is generally better for readability in long-form body text on screens?",
+      "When creating a primary action button, what is the most important factor for accessibility?",
+      "What is the recommended minimum contrast ratio for normal text according to WCAG 2.1 Level AA?",
+      "In design hierarchy, what does 'Scale' primarily help establish?",
+      "Which color combination is usually best for reading long text?",
+      "What is 'negative space' in a layout?",
+      "Why is '8pt grid' popular in modern UI design?",
+      "Which of these font types is usually best for small captions?",
+      "What does 'line-height' (leading) affect?",
+      "In a 3-column layout, which column typically attracts the first glance in LTR languages?"
+    ][i % 10],
+    options: [
+      ['Extra Light', 'Regular (400)', 'Bold', 'Black'],
+      ['Color', 'Border radius', 'Contrast ratio', 'Shadow'],
+      ['2:1', '3:1', '4.5:1', '7:1'],
+      ['Complexity', 'Relative importance', 'File size', 'Saturation'],
+      ['Red on Blue', 'Dark Grey on White', 'Yellow on Black', 'White on Light Pink'],
+      ['A mistake', 'The space between elements', 'A dark background', 'Bottom margins'],
+      ['It is divisible by 2 and 4', 'It matches screen resolutions', 'It looks better', 'It is standard for print'],
+      ['Script', 'Sans-Serif', 'Serif', 'Display'],
+      ['Character width', 'Vertical spacing between lines', 'Horizontal spacing', 'Paragraph padding'],
+      ['Right', 'Middle', 'Left', 'Top']
+    ][i % 10],
+    correctAnswer: [1, 2, 2, 1, 1, 1, 0, 1, 1, 2][i % 10],
+    explanation: "This principle ensures optimal clarity and user focus in digital interfaces."
+  })),
+  fintech: Array.from({ length: 20 }, (_, i) => ({
+    id: `fin-${i}`,
+    type: 'multiple-choice',
+    text: [
+      "Which color choice is most appropriate for a 'Risk: High' transaction alert?",
+      "In a financial dashboard, what is the primary goal of 'Information Density'?",
+      "Which currency formatting is clearest for global users?",
+      "What is a 'Trust Signal' in fintech onboarding?",
+      "How should negative balances usually be represented?"
+    ][i % 5],
+    options: [
+      ['Blue', 'Red', 'Green', 'Grey'],
+      ['Showing as much as possible', 'Clarity and quick scanning', 'Using small fonts', 'Hiding details'],
+      ['$10.00', '10.00 USD', '10$', 'USD 10'],
+      ['A fast app', 'Encryption badges/Security icons', 'Dark mode', 'Big buttons'],
+      ['With a plus sign', 'In red or with a minus sign', 'In bold only', 'By hiding them']
+    ][i % 5],
+    correctAnswer: [1, 1, 1, 1, 1][i % 5],
+    explanation: "Financial UX relies on established mental models for trust and security."
+  }))
 };
 
 const AuroraBackground = ({ show }: { show: boolean }) => {
   if (!show) return null;
   return (
     <div className="fixed top-0 left-0 w-full h-full pointer-events-none z-0 overflow-hidden">
-        {/* Top Right Aurora Blobs */}
         <div className="absolute -top-24 -right-24 w-[500px] h-[500px] bg-purple-300/40 rounded-full mix-blend-multiply filter blur-3xl opacity-50 animate-blob dark:opacity-20 dark:mix-blend-screen"></div>
         <div className="absolute top-0 -right-4 w-[400px] h-[400px] bg-pink-300/40 rounded-full mix-blend-multiply filter blur-3xl opacity-50 animate-blob dark:opacity-20 dark:mix-blend-screen" style={{ animationDelay: '2s' }}></div>
         <div className="absolute -top-8 right-48 w-[400px] h-[400px] bg-indigo-300/40 rounded-full mix-blend-multiply filter blur-3xl opacity-50 animate-blob dark:opacity-20 dark:mix-blend-screen" style={{ animationDelay: '4s' }}></div>
@@ -33,17 +131,15 @@ const AuroraBackground = ({ show }: { show: boolean }) => {
 };
 
 const App = () => {
-  // Initialize state based on local storage presence
   const [userProfile, setUserProfile] = useState<UserProfile | null>(() => {
     const saved = localStorage.getItem('aura_user_profile');
-    return saved ? JSON.parse(saved) : null;
+    try { return saved ? JSON.parse(saved) : null; } catch (e) { return null; }
   });
 
   const [screen, setScreen] = useState<Screen>(() => {
     return localStorage.getItem('aura_user_profile') ? Screen.DASHBOARD : Screen.ONBOARDING;
   });
 
-  // Onboarding State
   const [onboardingStep, setOnboardingStep] = useState(1);
   const [tempProfile, setTempProfile] = useState<UserProfile>({ name: '', role: '', goal: '' });
 
@@ -52,1112 +148,548 @@ const App = () => {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [isLiveConnected, setIsLiveConnected] = useState(false);
-  const [darkMode, setDarkMode] = useState(false);
-  const [voiceName, setVoiceName] = useState('Fenrir'); // Default voice
   
-  // History & Memory State
+  // Quiz Module State
+  const [dojoMode, setDojoMode] = useState<'hub' | 'config' | 'active' | 'results'>('hub');
+  const [selectedCategory, setSelectedCategory] = useState<QuizCategory | null>(null);
+  const [isTimedMode, setIsTimedMode] = useState(false);
+  const [timeRemaining, setTimeRemaining] = useState(0);
+  const [quizLength, setQuizLength] = useState(5);
+  const [activeQuestions, setActiveQuestions] = useState<Question[]>([]);
+  const [currentQuestionIdx, setCurrentQuestionIdx] = useState(0);
+  const [quizScore, setQuizScore] = useState(0);
+  const [quizStreak, setQuizStreak] = useState(0);
+  const [quizAnswers, setQuizAnswers] = useState<(number | null)[]>([]);
+  const [isShowingFeedback, setIsShowingFeedback] = useState(false);
+  const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
+  
   const [sessions, setSessions] = useState<ReviewSession[]>([]);
-  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
-  const [userFeedbackHistory, setUserFeedbackHistory] = useState<UserFeedback[]>(() => {
-    const saved = localStorage.getItem('aura_user_feedback');
-    return saved ? JSON.parse(saved) : [];
-  });
-
-  // Chat State
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState('');
   const chatSessionRef = useRef<Chat | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const pdfInputRef = useRef<HTMLInputElement>(null);
   const chatImageInputRef = useRef<HTMLInputElement>(null);
-  
-  // Live API Manager Ref
-  const liveManager = useRef<LiveSessionManager | null>(null);
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Load history on mount
   useEffect(() => {
     const saved = localStorage.getItem('aura_history');
     if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        // Rehydrate dates
-        const rehydrated = parsed.map((s: any) => ({
-          ...s,
-          chatHistory: s.chatHistory.map((m: any) => ({ ...m, timestamp: new Date(m.timestamp) }))
-        }));
-        setSessions(rehydrated);
-      } catch (e) {
-        console.error("Failed to load history", e);
-      }
+      try { setSessions(JSON.parse(saved)); } catch (e) { console.error(e); }
+    }
+    
+    // Load Leaderboard
+    const lastReset = localStorage.getItem('aura_dojo_reset');
+    const todayStr = new Date().toDateString();
+    if (lastReset !== todayStr) {
+      localStorage.setItem('aura_dojo_reset', todayStr);
+      localStorage.setItem('aura_dojo_leaderboard', JSON.stringify([]));
+      setLeaderboard([]);
+    } else {
+      const savedL = localStorage.getItem('aura_dojo_leaderboard');
+      if (savedL) setLeaderboard(JSON.parse(savedL));
     }
   }, []);
 
-  // Apply dark mode
-  useEffect(() => {
-    if (darkMode) {
-      document.documentElement.classList.add('dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-    }
-  }, [darkMode]);
-
-  // Save history whenever sessions change
   useEffect(() => {
     localStorage.setItem('aura_history', JSON.stringify(sessions));
   }, [sessions]);
 
-  // Save feedback history
+  // Quiz Timer Logic
   useEffect(() => {
-    localStorage.setItem('aura_user_feedback', JSON.stringify(userFeedbackHistory));
-  }, [userFeedbackHistory]);
-
-  // Clean up live session on unmount
-  useEffect(() => {
-    return () => {
-      if (liveManager.current) {
-        liveManager.current.disconnect();
-      }
-    };
-  }, []);
-
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [chatHistory, isAnalyzing]);
-
-  const handleNavigate = (s: Screen) => setScreen(s);
-
-  // --- Onboarding Handlers ---
-  const handleOnboardingNext = () => {
-      if (onboardingStep < 3) {
-          setOnboardingStep(prev => prev + 1);
+    if (dojoMode === 'active' && isTimedMode && !isShowingFeedback) {
+      if (timeRemaining > 0) {
+        timerRef.current = setTimeout(() => {
+          setTimeRemaining(t => t - 1);
+          if (timeRemaining <= 5) playSound('tick');
+        }, 1000);
       } else {
-          // Finish Onboarding
-          localStorage.setItem('aura_user_profile', JSON.stringify(tempProfile));
-          setUserProfile(tempProfile);
-          setScreen(Screen.DASHBOARD);
+        handleAnswer(-1); // Auto-fail on timeout
       }
-  };
-
-  const handleLogout = () => {
-      // Reset all user state
-      localStorage.removeItem('aura_user_profile');
-      setUserProfile(null);
-      setTempProfile({ name: '', role: '', goal: '' });
-      setOnboardingStep(1);
-      
-      // Force navigation to onboarding
-      setScreen(Screen.ONBOARDING);
-  };
-
-  // --- App Logic ---
-  const startChat = (initialContext: string, initialAnalysis: string) => {
-    // Initialize chat session
-    chatSessionRef.current = createChatSession(initialContext);
-    
-    // Set initial history
-    const history: ChatMessage[] = [
-      {
-        id: uuid(),
-        role: 'model',
-        text: initialAnalysis,
-        timestamp: new Date()
-      }
-    ];
-    setChatHistory(history);
-    return history;
-  };
-
-  const saveCurrentSession = (
-    id: string, 
-    type: 'token' | 'image', 
-    content: string, 
-    history: ChatMessage[], 
-    anns: Annotation[], 
-    imgPreview?: string
-  ) => {
-    const title = type === 'token' 
-      ? `Token Review ${new Date().toLocaleDateString()}` 
-      : `Visual Audit ${new Date().toLocaleDateString()}`;
-
-    const newSession: ReviewSession = {
-      id,
-      type,
-      content,
-      timestamp: Date.now(),
-      title,
-      thumbnail: imgPreview || undefined,
-      chatHistory: history,
-      annotations: anns
-    };
-
-    setSessions(prev => {
-      const existing = prev.findIndex(s => s.id === id);
-      if (existing >= 0) {
-        const updated = [...prev];
-        updated[existing] = { ...updated[existing], chatHistory: history, annotations: anns };
-        return updated;
-      }
-      return [newSession, ...prev];
-    });
-    setCurrentSessionId(id);
-  };
-
-  // Update current session when chat updates
-  useEffect(() => {
-    if (currentSessionId && chatHistory.length > 0) {
-      setSessions(prev => prev.map(s => {
-        if (s.id === currentSessionId) {
-          return { ...s, chatHistory };
-        }
-        return s;
-      }));
     }
-  }, [chatHistory, currentSessionId]);
+    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
+  }, [dojoMode, isTimedMode, timeRemaining, isShowingFeedback]);
 
   const handleSendMessage = async () => {
     if (!chatInput.trim() || !chatSessionRef.current) return;
-
-    const userMsg: ChatMessage = {
-      id: uuid(),
-      role: 'user',
-      text: chatInput,
-      timestamp: new Date()
-    };
-
+    const userMsg: ChatMessage = { id: uuid(), role: 'user', text: chatInput, timestamp: new Date() };
     setChatHistory(prev => [...prev, userMsg]);
     setChatInput('');
     setIsAnalyzing(true);
-
     try {
       const response: GenerateContentResponse = await chatSessionRef.current.sendMessage({ message: userMsg.text });
-      const text = response.text || "I'm having trouble thinking right now.";
-      
-      setChatHistory(prev => [...prev, {
-        id: uuid(),
-        role: 'model',
-        text: text,
-        timestamp: new Date()
-      }]);
-    } catch (e) {
-      console.error(e);
-      setChatHistory(prev => [...prev, {
-        id: uuid(),
-        role: 'model',
-        text: "Sorry, I encountered an error connecting to the server.",
-        timestamp: new Date()
-      }]);
-    } finally {
-      setIsAnalyzing(false);
-    }
-  };
-
-  const handleQuickTip = async () => {
-    const lastModelMsg = [...chatHistory].reverse().find(m => m.role === 'model');
-    const context = lastModelMsg ? lastModelMsg.text : "General UI design";
-    
-    const tip = await getQuickSuggestion(context);
-    setChatHistory(prev => [...prev, {
-        id: uuid(),
-        role: 'model',
-        text: `💡 Quick Tip: ${tip}`,
-        timestamp: new Date()
-    }]);
-  };
-
-  const handlePdfUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file || !chatSessionRef.current) return;
-
-    setIsAnalyzing(true);
-    try {
-      const base64 = await fileToBase64(file);
-      const cleanBase64 = base64.split(',')[1]; // Remove data URL prefix
-
-      // Add a visual indicator to chat history
-      setChatHistory(prev => [...prev, {
-        id: uuid(),
-        role: 'user',
-        text: `📄 Uploaded context: ${file.name}`,
-        timestamp: new Date()
-      }]);
-
-      // Send to Gemini
-      const response = await chatSessionRef.current.sendMessage({ 
-        message: [
-            { text: `Here is a PDF document titled "${file.name}" containing project context. Please analyze it and use this information to provide more specific and relevant feedback on the design.` },
-            { 
-                inlineData: {
-                    mimeType: file.type,
-                    data: cleanBase64
-                }
-            }
-        ]
-      });
-      
-      const text = response.text || "Context received. I will use this for further reviews.";
-      
-      setChatHistory(prev => [...prev, {
-        id: uuid(),
-        role: 'model',
-        text: text,
-        timestamp: new Date()
-      }]);
-
-    } catch (error) {
-      console.error("PDF upload failed", error);
-      setChatHistory(prev => [...prev, {
-        id: uuid(),
-        role: 'model',
-        text: "I had trouble processing that PDF. Please try again.",
-        timestamp: new Date()
-      }]);
-    } finally {
-      setIsAnalyzing(false);
-      // Reset input
-      if (pdfInputRef.current) pdfInputRef.current.value = '';
-    }
-  };
-
-  const startImageAnalysis = async (file: File) => {
-    const sessionId = uuid();
-    const url = URL.createObjectURL(file);
-    const base64 = await fileToBase64(file);
-
-    setPreviewUrl(url);
-    setGeneratedImage(null);
-    setTokenInput('');
-    setAnnotations([]);
-    setScreen(Screen.REVIEW);
-    setIsAnalyzing(true);
-    setCurrentSessionId(sessionId);
-    
-    // Pass prior memory/feedback to analysis
-    const { text, annotations } = await analyzeImage(file, userFeedbackHistory);
-    setAnnotations(annotations);
-    const initialHistory = startChat(text, text); 
-
-    saveCurrentSession(sessionId, 'image', base64, initialHistory, annotations, base64);
-    setIsAnalyzing(false);
-  };
-
-  // Keep a ref to the latest startImageAnalysis to avoid stale closures in the paste listener
-  const startImageAnalysisRef = useRef(startImageAnalysis);
-  useEffect(() => {
-    startImageAnalysisRef.current = startImageAnalysis;
-  });
-
-  // Global Paste Handler
-  useEffect(() => {
-    const handlePaste = (e: ClipboardEvent) => {
-      // Only allow pasting images if NOT on onboarding
-      if (screen === Screen.ONBOARDING) return;
-
-      if (e.clipboardData?.items) {
-        for (let i = 0; i < e.clipboardData.items.length; i++) {
-          const item = e.clipboardData.items[i];
-          if (item.type.startsWith('image')) {
-            const file = item.getAsFile();
-            if (file) {
-              e.preventDefault();
-              startImageAnalysisRef.current(file);
-              return;
-            }
-          }
-        }
-      }
-    };
-
-    window.addEventListener('paste', handlePaste);
-    return () => window.removeEventListener('paste', handlePaste);
-  }, [screen]); // Add screen as dependency
-
-  const handleStartReview = async (code: string) => {
-    if (!code) return;
-    const sessionId = uuid();
-    setTokenInput(code);
-    setPreviewUrl(null);
-    setGeneratedImage(null);
-    setAnnotations([]);
-    setScreen(Screen.REVIEW);
-    setIsAnalyzing(true);
-    setCurrentSessionId(sessionId);
-    
-    // Trigger Thinking Analysis
-    const result = await analyzeDesignToken(code);
-    const initialHistory = startChat(code, result);
-    
-    saveCurrentSession(sessionId, 'token', code, initialHistory, []);
-    setIsAnalyzing(false);
+      setChatHistory(prev => [...prev, { id: uuid(), role: 'model', text: response.text || "", timestamp: new Date() }]);
+    } catch (e) { console.error(e); } finally { setIsAnalyzing(false); }
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-        await startImageAnalysis(file);
-    }
-  };
-  
-  const handleChatImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      await startImageAnalysis(file);
-    }
-    // Reset
-    if (chatImageInputRef.current) chatImageInputRef.current.value = '';
-  };
-
-  const loadSession = (session: ReviewSession) => {
-    setCurrentSessionId(session.id);
-    setChatHistory(session.chatHistory);
-    setAnnotations(session.annotations);
-    setScreen(Screen.REVIEW);
-
-    if (session.type === 'image') {
-      setPreviewUrl(session.content);
-      setTokenInput('');
-      chatSessionRef.current = createChatSession("Continuing previous session...");
-    } else {
-      setTokenInput(session.content);
-      setPreviewUrl(null);
-      chatSessionRef.current = createChatSession(session.content);
+      const sessionId = uuid();
+      const url = URL.createObjectURL(file);
+      setPreviewUrl(url);
+      setScreen(Screen.REVIEW);
+      setIsAnalyzing(true);
+      const { text, annotations } = await analyzeImage(file);
+      setAnnotations(annotations);
+      chatSessionRef.current = createChatSession(text);
+      setChatHistory([{ id: uuid(), role: 'model', text, timestamp: new Date() }]);
+      setIsAnalyzing(false);
     }
   };
 
-  const toggleLiveSession = async () => {
-    if (isLiveConnected) {
-      liveManager.current?.disconnect();
-      liveManager.current = null;
-      setIsLiveConnected(false);
-    } else {
-      if (!process.env.API_KEY) {
-        alert("Please select an API key via the settings or project configuration.");
-        return;
-      }
-      
-      liveManager.current = new LiveSessionManager(process.env.API_KEY);
-      await liveManager.current.connect(
-        (text, isUser) => console.log(text), 
-        (connected) => setIsLiveConnected(connected),
-        voiceName
-      );
-
-      // Send current context to the live session
-      const visualContext = generatedImage || previewUrl;
-      if (visualContext && liveManager.current) {
-          let base64Data = "";
-          
-          if (visualContext.startsWith('blob:')) {
-             try {
-               const response = await fetch(visualContext);
-               const blob = await response.blob();
-               base64Data = await fileToBase64(blob);
-             } catch (e) {
-               console.error("Failed to process blob for live session", e);
-             }
-          } else {
-            base64Data = visualContext;
-          }
-
-          if (base64Data) {
-             await liveManager.current.sendImage(base64Data);
-          }
-      }
-    }
+  const handleLogout = () => {
+    localStorage.removeItem('aura_user_profile');
+    setUserProfile(null);
+    setScreen(Screen.ONBOARDING);
+    setOnboardingStep(1);
   };
 
-  const handleFeedback = (index: number, rating: 'good' | 'bad', comment?: string) => {
-    const updatedAnnotations = [...annotations];
-    updatedAnnotations[index].rating = rating;
-    updatedAnnotations[index].userFeedback = comment;
-    setAnnotations(updatedAnnotations);
-
-    // Persist to Memory Layer
-    const newFeedback: UserFeedback = {
-        id: uuid(),
-        annotationLabel: updatedAnnotations[index].label,
-        suggestion: updatedAnnotations[index].suggestion,
-        rating: rating,
-        userComment: comment,
-        timestamp: Date.now()
-    };
-    setUserFeedbackHistory(prev => [...prev, newFeedback]);
-  };
-
-  const handleExportReport = async () => {
-    let imageSource = generatedImage || previewUrl;
+  // --- Quiz Logic ---
+  const startQuiz = () => {
+    const pool = FULL_QUESTION_POOL[selectedCategory?.id || 'fundamentals'] || [];
+    const shuffled = [...pool].sort(() => Math.random() - 0.5);
+    const selected = shuffled.slice(0, quizLength);
     
-    if (imageSource && imageSource.startsWith('blob:')) {
-      try {
-        const response = await fetch(imageSource);
-        const blob = await response.blob();
-        imageSource = await fileToBase64(blob);
-      } catch (e) {
-        console.error("Failed to convert blob to base64 for export", e);
-      }
-    }
-
-    const printWindow = window.open('', '_blank');
-    if (!printWindow) return;
-
-    const content = `
-      <html>
-        <head>
-          <title>Aura Design Report - ${new Date().toLocaleDateString()}</title>
-          <style>
-            body { font-family: 'Inter', sans-serif; padding: 40px; max-width: 800px; mx-auto; color: #1e293b; }
-            h1 { font-size: 24px; color: #0f172a; margin-bottom: 10px; border-bottom: 2px solid #f1f5f9; padding-bottom: 20px; }
-            .meta { color: #64748b; font-size: 14px; margin-bottom: 40px; }
-            .preview-container { margin-bottom: 40px; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; text-align: center; }
-            img { max-width: 100%; height: auto; display: block; margin: 0 auto; }
-            .annotation-list { margin-bottom: 40px; }
-            .annotation-item { margin-bottom: 12px; padding: 12px; background: #f8fafc; border-radius: 8px; border-left: 4px solid #ec4899; }
-            .chat-log { border-top: 2px solid #f1f5f9; padding-top: 20px; }
-            .message { margin-bottom: 16px; padding: 12px; border-radius: 8px; }
-            .message.model { background: #fdf2f8; }
-            .message.user { background: #f1f5f9; }
-            .role { font-weight: bold; font-size: 12px; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.5px; }
-          </style>
-        </head>
-        <body>
-          <h1>Aura Design Audit Report</h1>
-          <div class="meta">Generated for ${userProfile?.name || 'User'} on ${new Date().toLocaleString()}</div>
-
-          ${imageSource ? `
-            <div class="preview-container">
-              <img src="${imageSource}" alt="Design Preview" />
-            </div>
-          ` : '<p style="color: #94a3b8; font-style: italic;">No image preview available.</p>'}
-
-          ${annotations.length > 0 ? `
-            <h3>Identified Issues & Suggestions</h3>
-            <div class="annotation-list">
-              ${annotations.map((a, i) => `
-                <div class="annotation-item">
-                  <strong>${i + 1}. ${a.label}</strong><br/>
-                  ${a.suggestion}
-                </div>
-              `).join('')}
-            </div>
-          ` : ''}
-
-          <div class="chat-log">
-            <h3>Detailed AI Analysis</h3>
-            ${chatHistory.map(msg => `
-              <div class="message ${msg.role}">
-                <div class="role">${msg.role === 'model' ? 'Aura AI' : (userProfile?.name || 'Designer')}</div>
-                <div>${msg.text.replace(/\n/g, '<br/>')}</div>
-              </div>
-            `).join('')}
-          </div>
-
-          <script>
-            window.onload = () => { setTimeout(() => window.print(), 500); }
-          </script>
-        </body>
-      </html>
-    `;
-
-    printWindow.document.write(content);
-    printWindow.document.close();
+    setActiveQuestions(selected);
+    setDojoMode('active');
+    setCurrentQuestionIdx(0);
+    setQuizScore(0);
+    setQuizStreak(0);
+    setQuizAnswers([]);
+    setIsShowingFeedback(false);
+    if (isTimedMode) setTimeRemaining(15);
   };
 
-  // --- Sub-Render Functions ---
+  const handleAnswer = (idx: number) => {
+    if (isShowingFeedback) return;
+    const q = activeQuestions[currentQuestionIdx];
+    const isCorrect = idx === q.correctAnswer;
+    
+    if (isCorrect) {
+      let points = 100;
+      if (isTimedMode) points += Math.floor(timeRemaining * 10); // Bonus for speed
+      points += (quizStreak * 25); // Bonus for streak
+      setQuizScore(s => s + points);
+      setQuizStreak(s => s + 1);
+      playSound('correct');
+    } else {
+      setQuizStreak(0);
+      playSound('incorrect');
+    }
+    
+    setQuizAnswers(prev => [...prev, idx]);
+    setIsShowingFeedback(true);
+  };
+
+  const nextQuestion = () => {
+    if (currentQuestionIdx < activeQuestions.length - 1) {
+      setCurrentQuestionIdx(i => i + 1);
+      setIsShowingFeedback(false);
+      if (isTimedMode) setTimeRemaining(15);
+    } else {
+      completeQuiz();
+    }
+  };
+
+  const completeQuiz = () => {
+    playSound('complete');
+    const newEntry: LeaderboardEntry = {
+      name: userProfile?.name || 'Designer',
+      score: quizScore,
+      category: selectedCategory?.name || 'Fundamentals',
+      timestamp: Date.now(),
+      avatar: `https://i.pravatar.cc/150?u=${uuid()}`
+    };
+    const newLeaderboard = [newEntry, ...leaderboard].sort((a, b) => b.score - a.score).slice(0, 10);
+    setLeaderboard(newLeaderboard);
+    localStorage.setItem('aura_dojo_leaderboard', JSON.stringify(newLeaderboard));
+    setDojoMode('results');
+  };
 
   const renderOnboarding = () => (
-      <div className="flex items-center justify-center min-h-screen relative z-20 px-8">
-          <div className="max-w-md w-full">
-              {/* Progress Indicator */}
-              <div className="flex gap-2 mb-8 justify-center">
-                  {[1, 2, 3].map(step => (
-                      <div key={step} className={`h-1 rounded-full transition-all duration-500 ${step <= onboardingStep ? 'w-8 bg-purple-500' : 'w-2 bg-slate-200 dark:bg-slate-700'}`}></div>
-                  ))}
-              </div>
-
-              <div className="bg-white dark:bg-slate-800 rounded-[40px] p-10 shadow-2xl shadow-purple-200/50 dark:shadow-none border border-slate-100 dark:border-slate-700 text-center relative overflow-hidden transition-all duration-500">
-                  {/* Step 1: Name */}
-                  {onboardingStep === 1 && (
-                      <div className="animate-fade-in">
-                          <span className="material-icons-round text-4xl text-purple-500 mb-4">waving_hand</span>
-                          <h2 className="text-3xl font-medium text-slate-900 dark:text-white mb-2">Welcome to Aura</h2>
-                          <p className="text-slate-500 dark:text-slate-400 mb-8">Let's get to know you. What should we call you?</p>
-                          <Input 
-                              placeholder="Your Name" 
-                              value={tempProfile.name}
-                              onChange={(e) => setTempProfile({...tempProfile, name: e.target.value})}
-                              className="text-center text-lg mb-8"
-                              autoFocus
-                              onKeyDown={(e) => e.key === 'Enter' && tempProfile.name && handleOnboardingNext()}
-                          />
-                          <Button 
-                              onClick={handleOnboardingNext} 
-                              disabled={!tempProfile.name.trim()} 
-                              className="w-full py-4 text-lg"
-                          >
-                              Next
-                          </Button>
-                      </div>
-                  )}
-
-                  {/* Step 2: Role */}
-                  {onboardingStep === 2 && (
-                      <div className="animate-fade-in">
-                          <span className="material-icons-round text-4xl text-pink-500 mb-4">work_outline</span>
-                          <h2 className="text-2xl font-medium text-slate-900 dark:text-white mb-2">What do you do?</h2>
-                          <p className="text-slate-500 dark:text-slate-400 mb-8">This helps us tailor the feedback.</p>
-                          <div className="grid grid-cols-1 gap-3 mb-8">
-                              {['Product Designer', 'Frontend Developer', 'Product Manager', 'Founder', 'Student'].map(role => (
-                                  <button
-                                      key={role}
-                                      onClick={() => {
-                                          setTempProfile({...tempProfile, role});
-                                          setTimeout(handleOnboardingNext, 200); 
-                                      }}
-                                      className={`p-4 rounded-2xl border transition-all font-medium text-sm ${tempProfile.role === role ? 'border-purple-500 bg-purple-50 dark:bg-purple-900/20 text-purple-700 dark:text-purple-300' : 'border-slate-100 dark:border-slate-700 hover:border-purple-200 dark:hover:border-purple-800 text-slate-600 dark:text-slate-400'}`}
-                                  >
-                                      {role}
-                                  </button>
-                              ))}
-                          </div>
-                      </div>
-                  )}
-
-                  {/* Step 3: Goal */}
-                  {onboardingStep === 3 && (
-                      <div className="animate-fade-in">
-                          <span className="material-icons-round text-4xl text-blue-500 mb-4">flag</span>
-                          <h2 className="text-2xl font-medium text-slate-900 dark:text-white mb-2">Main Goal?</h2>
-                          <p className="text-slate-500 dark:text-slate-400 mb-8">What are you looking to achieve?</p>
-                          <div className="grid grid-cols-1 gap-3 mb-8">
-                              {['Visual Inspiration', 'Design System Audit', 'Improve Accessibility', 'Speed up Workflow'].map(goal => (
-                                  <button
-                                      key={goal}
-                                      onClick={() => setTempProfile({...tempProfile, goal})}
-                                      className={`p-4 rounded-2xl border transition-all font-medium text-sm ${tempProfile.goal === goal ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300' : 'border-slate-100 dark:border-slate-700 hover:border-blue-200 dark:hover:border-blue-800 text-slate-600 dark:text-slate-400'}`}
-                                  >
-                                      {goal}
-                                  </button>
-                              ))}
-                          </div>
-                          <Button 
-                              onClick={handleOnboardingNext} 
-                              disabled={!tempProfile.goal} 
-                              className="w-full py-4 text-lg"
-                              variant="primary"
-                          >
-                              Get Started
-                          </Button>
-                      </div>
-                  )}
-              </div>
-          </div>
+    <div className="max-w-md mx-auto pt-32 px-8 text-center animate-fade-in relative z-10">
+      <div className="w-20 h-20 rounded-[32px] aurora-vibrant mx-auto mb-12 flex items-center justify-center text-white shadow-glow">
+        <span className="material-icons-round text-4xl">auto_awesome</span>
       </div>
-  );
-
-  const renderDashboard = () => (
-    <div className="max-w-6xl mx-auto pt-24 px-8 relative animate-fade-in">
-      <header className="mb-20">
-        <h1 className="text-[4.5rem] leading-[1.1] tracking-tight font-medium mb-4 dark:text-white">
-          <span className="text-gradient-primary">Hello, {userProfile?.name || 'Designer'}</span>
-        </h1>
-        <p className="text-3xl text-slate-500 dark:text-slate-400 font-light">How can I assist you today?</p>
-      </header>
-
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-        <ModernCard 
-          title="Token Analysis" 
-          description="Paste your design system tokens for a deep UX and accessibility review by Gemini."
-          icon="code"
-          color="blue"
-          onClick={() => setScreen(Screen.TOKEN_INPUT)}
-        />
-        
-        <ModernCard 
-          title="Design Audit" 
-          description="Upload a screenshot of your interface for instant visual improvements and suggestions."
-          icon="image_search"
-          color="pink"
-          onClick={() => {
-            setScreen(Screen.TOKEN_INPUT); 
-          }}
-        />
-
-        <ModernCard 
-          title="Session History" 
-          description="Browse your past brainstorming sessions, design audits, and generated reports."
-          icon="history"
-          color="purple"
-          onClick={() => setScreen(Screen.HISTORY)}
-        />
-      </div>
-    </div>
-  );
-
-  const renderHistory = () => (
-    <div className="max-w-6xl mx-auto pt-20 px-8 pb-12 relative z-10 animate-fade-in">
-      <header className="mb-16">
-        <h1 className="text-4xl font-medium text-slate-900 dark:text-white mb-2">Design History</h1>
-        <p className="text-slate-500 dark:text-slate-400 font-normal text-lg">Your past design reviews and audits.</p>
-      </header>
-
-      {sessions.length === 0 ? (
-        <div className="text-center py-32 bg-white/50 dark:bg-slate-800/50 rounded-[40px] border border-dashed border-slate-200 dark:border-slate-700">
-          <div className="w-16 h-16 bg-slate-50 dark:bg-slate-800 rounded-full flex items-center justify-center mx-auto mb-4 text-slate-300 dark:text-slate-600">
-            <span className="material-icons-round text-3xl">history_toggle_off</span>
-          </div>
-          <h3 className="text-lg font-medium text-slate-900 dark:text-white">No history yet</h3>
-          <p className="text-slate-500 dark:text-slate-400 mb-8 font-normal">Start a review to build your history.</p>
-          <Button onClick={() => setScreen(Screen.TOKEN_INPUT)}>Start New Review</Button>
+      {onboardingStep === 1 ? (
+        <div className="space-y-4">
+          <h1 className="text-4xl font-medium mb-4">Welcome to Aura</h1>
+          <Input placeholder="What's your name?" value={tempProfile.name} onChange={e => setTempProfile({...tempProfile, name: e.target.value})} />
+          <Button className="w-full py-4" onClick={() => setOnboardingStep(2)} disabled={!tempProfile.name}>Get Started</Button>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-          {sessions.map(session => (
-            <div key={session.id} onClick={() => loadSession(session)} className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-[32px] overflow-hidden hover:shadow-xl transition-all duration-300 cursor-pointer group flex flex-col">
-              <div className="h-48 bg-slate-50 dark:bg-slate-900 relative overflow-hidden flex items-center justify-center">
-                {session.thumbnail ? (
-                  <img src={session.thumbnail} alt="Preview" className="w-full h-full object-cover opacity-90 group-hover:scale-105 transition-transform duration-500" />
-                ) : (
-                  <div className="text-slate-300 flex flex-col items-center">
-                    <span className="material-icons-round text-5xl mb-3 text-slate-200 dark:text-slate-700">code</span>
-                  </div>
-                )}
-                <div className="absolute top-4 right-4 bg-white/90 dark:bg-slate-800/90 backdrop-blur px-3 py-1 rounded-full text-[10px] font-bold tracking-widest uppercase text-slate-500 dark:text-slate-300 border border-slate-100 dark:border-slate-700 shadow-sm">
-                  {session.type}
-                </div>
-              </div>
-              <div className="p-8 flex-1 flex flex-col">
-                <span className="text-xs text-slate-400 mb-2 block font-mono">{new Date(session.timestamp).toLocaleDateString()}</span>
-                <h3 className="font-medium text-xl text-slate-900 dark:text-white mb-3 truncate">{session.title}</h3>
-                <p className="text-sm text-slate-500 dark:text-slate-400 line-clamp-2 mb-8 font-normal leading-relaxed flex-1">
-                  {session.chatHistory.find(m => m.role === 'model')?.text || "No analysis details available."}
-                </p>
-                <div className="flex items-center gap-2 text-sm font-medium text-slate-900 dark:text-white group-hover:translate-x-2 transition-transform">
-                   Reopen <span className="material-icons-round text-base">arrow_forward</span>
-                </div>
-              </div>
-            </div>
+        <div className="space-y-4">
+          <h1 className="text-3xl font-medium mb-4">Your Goal?</h1>
+          {['Improve UX Skills', 'Speed up Reviews', 'Accessibility Audits'].map(goal => (
+            <button key={goal} onClick={() => setTempProfile({...tempProfile, goal})} className={`w-full p-5 rounded-2xl border-2 transition-all text-left flex justify-between ${tempProfile.goal === goal ? 'border-slate-900 bg-slate-900 text-white' : 'border-slate-100'}`}>{goal}</button>
           ))}
+          <Button className="w-full py-4" onClick={() => { setUserProfile(tempProfile); localStorage.setItem('aura_user_profile', JSON.stringify(tempProfile)); setScreen(Screen.DASHBOARD); }}>Finish Setup</Button>
         </div>
       )}
     </div>
   );
 
-  const renderTokenInput = () => (
-    <div className="max-w-4xl mx-auto pt-20 px-8 h-[calc(100vh-4rem)] flex flex-col justify-center relative z-10 animate-fade-in">
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-16 items-center">
-        <div className="order-2 lg:order-1">
-           <div className="bg-white dark:bg-slate-800 rounded-[40px] p-10 shadow-xl shadow-purple-100/50 dark:shadow-none border border-slate-100 dark:border-slate-700 relative overflow-hidden">
-             <div className="relative z-10">
-               <h2 className="text-3xl font-medium text-slate-900 dark:text-white mb-2">New Session</h2>
-               <p className="text-slate-500 dark:text-slate-400 mb-8 font-normal">Paste a token, upload a frame, or <span className="font-medium text-slate-700 dark:text-slate-200">Ctrl+V</span> to paste an image.</p>
-               
-               <textarea 
-                 className="w-full h-48 bg-slate-50 dark:bg-slate-900 border border-slate-100 dark:border-slate-700 rounded-2xl p-5 font-mono text-sm text-slate-600 dark:text-slate-300 focus:ring-1 focus:ring-purple-200 dark:focus:ring-purple-900 focus:outline-none resize-none mb-6 transition-all placeholder-slate-400"
-                 placeholder='Paste Figma JSON token...'
-                 value={tokenInput}
-                 onChange={(e) => setTokenInput(e.target.value)}
-               ></textarea>
-               
-               <div className="flex gap-4">
-                 <Button 
-                    onClick={() => handleStartReview(tokenInput)} 
-                    className="flex-1" 
-                    disabled={!tokenInput}
-                  >
-                    Analyze
-                 </Button>
-                 <div className="relative">
-                     <input 
-                        type="file" 
-                        id="file-upload" 
-                        className="hidden" 
-                        accept="image/*"
-                        onChange={handleFileUpload}
-                    />
-                     <label 
-                        htmlFor="file-upload" 
-                        className="flex items-center justify-center w-14 h-12 rounded-2xl border border-slate-200 dark:border-slate-700 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400 transition-colors"
-                     >
-                        <span className="material-icons-round">image</span>
-                     </label>
-                 </div>
-               </div>
-             </div>
-           </div>
-        </div>
-        <div className="order-1 lg:order-2 flex justify-center relative">
-            <div className="w-80 h-96 bg-gradient-to-b from-white to-purple-50/30 dark:from-slate-800 dark:to-purple-900/20 rounded-[40px] border border-white dark:border-slate-700 shadow-soft flex items-center justify-center transform rotate-3 p-8">
-               <div className="w-full h-full border border-dashed border-purple-200 dark:border-purple-800 rounded-3xl flex flex-col items-center justify-center text-purple-300 dark:text-purple-700">
-                  <span className="material-icons-round text-6xl mb-4">view_quilt</span>
-                  <span className="text-sm font-medium tracking-wider uppercase">Preview</span>
-               </div>
+  const renderDojo = () => (
+    <div className="flex h-screen bg-[#F8F9FC] dark:bg-slate-950 overflow-hidden relative z-10 animate-fade-in">
+      {/* Left Panel: Hub / Config / Active */}
+      <div className="flex-1 overflow-y-auto pt-20 px-12 pb-12">
+        {dojoMode === 'hub' && (
+          <>
+            <div className="mb-12">
+               <h1 className="text-5xl font-medium text-slate-900 dark:text-white mb-2">Design Quizzes</h1>
+               <p className="text-xl text-slate-500 font-light">Daily skill-sharpening exercises.</p>
             </div>
-        </div>
-      </div>
-    </div>
-  );
-
-  const renderSettings = () => (
-    <div className="max-w-2xl mx-auto pt-20 px-8 pb-12 relative z-10 animate-fade-in">
-      <header className="mb-12">
-        <h1 className="text-4xl font-medium text-slate-900 dark:text-white mb-2">Settings</h1>
-        <p className="text-slate-500 dark:text-slate-400 font-normal text-lg">Manage your preferences and account.</p>
-      </header>
-
-      <div className="flex flex-col gap-8">
-        {/* Profile Section */}
-        <div className="bg-white dark:bg-slate-800 rounded-[32px] p-8 border border-slate-100 dark:border-slate-700 flex items-center justify-between gap-6">
-          <div className="flex items-center gap-6">
-            <div className="w-24 h-24 rounded-full border-4 border-purple-50 dark:border-slate-700 overflow-hidden bg-purple-100 dark:bg-purple-900 flex items-center justify-center">
-              {/* Generate avatar initial if no image */}
-               <span className="text-4xl font-bold text-purple-500 dark:text-purple-300">
-                  {userProfile?.name?.charAt(0) || 'A'}
-               </span>
-            </div>
-            <div>
-              <h2 className="text-2xl font-medium text-slate-900 dark:text-white">{userProfile?.name || 'Designer'}</h2>
-              <p className="text-slate-500 dark:text-slate-400 mb-2">{userProfile?.role || 'User'}</p>
-              <span className="bg-purple-100 dark:bg-purple-900 text-purple-600 dark:text-purple-300 text-xs font-bold px-3 py-1 rounded-full uppercase tracking-wide">
-                 {userProfile?.goal ? userProfile.goal.split(' ')[0] : 'Pro'} Member
-              </span>
-            </div>
-          </div>
-          <Button variant="secondary" onClick={handleLogout}>Sign Out</Button>
-        </div>
-
-        {/* Appearance */}
-        <div className="bg-white dark:bg-slate-800 rounded-[32px] p-8 border border-slate-100 dark:border-slate-700">
-          <h3 className="text-xl font-medium text-slate-900 dark:text-white mb-6">Appearance</h3>
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <div className="w-12 h-12 rounded-2xl bg-slate-50 dark:bg-slate-900 flex items-center justify-center text-slate-600 dark:text-slate-300">
-                <span className="material-icons-round">{darkMode ? 'dark_mode' : 'light_mode'}</span>
-              </div>
-              <div>
-                <p className="font-medium text-slate-900 dark:text-white">Dark Mode</p>
-                <p className="text-sm text-slate-500 dark:text-slate-400">Switch between light and dark themes</p>
-              </div>
-            </div>
-            <button 
-              onClick={() => setDarkMode(!darkMode)}
-              className={`w-14 h-8 rounded-full transition-colors relative ${darkMode ? 'bg-purple-500' : 'bg-slate-200'}`}
-            >
-              <div className={`absolute top-1 w-6 h-6 rounded-full bg-white shadow-sm transition-transform duration-300 ${darkMode ? 'left-7' : 'left-1'}`}></div>
-            </button>
-          </div>
-        </div>
-
-        {/* AI Persona */}
-        <div className="bg-white dark:bg-slate-800 rounded-[32px] p-8 border border-slate-100 dark:border-slate-700">
-          <h3 className="text-xl font-medium text-slate-900 dark:text-white mb-6">AI Assistant Voice</h3>
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-            {['Fenrir', 'Puck', 'Kore', 'Charon', 'Aoede'].map((v) => (
-              <button
-                key={v}
-                onClick={() => setVoiceName(v)}
-                className={`p-4 rounded-2xl border transition-all text-left ${
-                  voiceName === v 
-                    ? 'border-purple-500 bg-purple-50 dark:bg-purple-900/20 dark:border-purple-500' 
-                    : 'border-slate-100 dark:border-slate-700 hover:border-purple-200 dark:hover:border-purple-800'
-                }`}
-              >
-                <div className="flex items-center gap-2 mb-2">
-                   <span className={`material-icons-round text-lg ${voiceName === v ? 'text-purple-500' : 'text-slate-300'}`}>
-                     {voiceName === v ? 'radio_button_checked' : 'radio_button_unchecked'}
-                   </span>
-                   <span className={`font-medium ${voiceName === v ? 'text-purple-700 dark:text-purple-300' : 'text-slate-600 dark:text-slate-400'}`}>
-                     {v}
-                   </span>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+              {QUIZ_CATEGORIES.map(cat => (
+                <div key={cat.id} onClick={() => { setSelectedCategory(cat); setDojoMode('config'); }} className="bg-white dark:bg-slate-900 p-10 rounded-[40px] border border-slate-100 dark:border-slate-800 hover:shadow-2xl hover:-translate-y-1 transition-all cursor-pointer group flex flex-col h-[320px]">
+                  <div className={`w-14 h-14 rounded-2xl flex items-center justify-center mb-8 bg-slate-50 dark:bg-slate-800 text-${cat.color}-500`}>
+                     <span className="material-icons-round text-3xl">{cat.icon}</span>
+                  </div>
+                  <h3 className="text-2xl font-medium mb-3">{cat.name}</h3>
+                  <p className="text-slate-500 mb-6">{cat.description}</p>
+                  <div className="mt-auto flex items-center gap-2">
+                     <span className="text-[10px] font-bold uppercase tracking-widest bg-slate-50 dark:bg-slate-800 px-3 py-1.5 rounded-full text-slate-400">{cat.difficulty}</span>
+                     <span className="ml-auto text-sm font-bold text-slate-900 dark:text-white group-hover:translate-x-1 transition-transform flex items-center gap-1">Practice <span className="material-icons-round text-base">arrow_forward</span></span>
+                  </div>
                 </div>
-              </button>
-            ))}
-          </div>
-        </div>
+              ))}
+            </div>
+          </>
+        )}
 
-        {/* Data */}
-        <div className="bg-white dark:bg-slate-800 rounded-[32px] p-8 border border-slate-100 dark:border-slate-700">
-           <h3 className="text-xl font-medium text-slate-900 dark:text-white mb-6">Data & Privacy</h3>
-           <div className="flex items-center justify-between">
-              <div>
-                <p className="font-medium text-slate-900 dark:text-white">Clear Session History</p>
-                <p className="text-sm text-slate-500 dark:text-slate-400">Permanently remove all your design reviews</p>
-              </div>
-              <Button 
-                variant="danger" 
-                onClick={() => {
-                   if (confirm("Are you sure you want to clear all history?")) {
-                      localStorage.removeItem('aura_history');
-                      setSessions([]);
-                      localStorage.removeItem('aura_user_feedback');
-                      setUserFeedbackHistory([]);
-                   }
-                }}
-              >
-                Clear Data
-              </Button>
-           </div>
-        </div>
+        {dojoMode === 'config' && (
+          <div className="max-w-xl mx-auto py-12 text-center h-full flex flex-col justify-center">
+             <Button variant="ghost" onClick={() => setDojoMode('hub')} className="mb-12 self-center"><span className="material-icons-round">arrow_back</span> Hub</Button>
+             <div className="w-24 h-24 bg-white dark:bg-slate-900 rounded-[32px] shadow-xl flex items-center justify-center mx-auto mb-8 border border-slate-50 dark:border-slate-800">
+                <span className="material-icons-round text-4xl text-slate-400">{selectedCategory?.icon}</span>
+             </div>
+             <h2 className="text-4xl font-medium mb-2">{selectedCategory?.name}</h2>
+             <p className="text-slate-500 mb-12">Configure your session length and pace.</p>
+             
+             <div className="bg-white dark:bg-slate-900 p-10 rounded-[48px] shadow-soft border border-slate-100 dark:border-slate-800 space-y-10 mb-12">
+                <div className="flex gap-4">
+                   <button onClick={() => setIsTimedMode(true)} className={`flex-1 p-6 rounded-3xl border-2 transition-all flex flex-col items-center gap-2 ${isTimedMode ? 'border-slate-900 bg-slate-900 text-white dark:bg-white dark:text-slate-900' : 'border-slate-100 text-slate-400'}`}>
+                      <span className="material-icons-round">timer</span>
+                      <span className="font-bold">Timed</span>
+                   </button>
+                   <button onClick={() => setIsTimedMode(false)} className={`flex-1 p-6 rounded-3xl border-2 transition-all flex flex-col items-center gap-2 ${!isTimedMode ? 'border-slate-900 bg-slate-900 text-white dark:bg-white dark:text-slate-900' : 'border-slate-100 text-slate-400'}`}>
+                      <span className="material-icons-round">psychology</span>
+                      <span className="font-bold">Relaxed</span>
+                   </button>
+                </div>
+                <div>
+                   <h4 className="text-xs font-bold uppercase tracking-widest text-slate-400 mb-6">Quiz Length</h4>
+                   <div className="flex justify-center gap-4">
+                      {[5, 10, 20].map(l => (
+                        <button key={l} onClick={() => setQuizLength(l)} className={`w-20 h-16 rounded-2xl border-2 transition-all font-bold ${quizLength === l ? 'border-slate-900 bg-slate-900 text-white dark:bg-white dark:text-slate-900' : 'border-slate-100 text-slate-400'}`}>{l}</button>
+                      ))}
+                   </div>
+                </div>
+             </div>
+             <Button onClick={startQuiz} className="w-full py-6 text-xl rounded-[32px]">Challenge Accepted</Button>
+          </div>
+        )}
+
+        {dojoMode === 'active' && (
+          <div className="max-w-3xl mx-auto h-full flex flex-col py-12">
+             <div className="flex justify-between items-center mb-16">
+                <div className="flex items-center gap-6">
+                   <div className="text-4xl font-black text-slate-900 dark:text-white">{quizScore}</div>
+                   <div className="flex items-center gap-1 text-orange-500">
+                      <span className="material-icons-round">local_fire_department</span>
+                      <span className="font-black text-xl">{quizStreak}</span>
+                   </div>
+                </div>
+                {isTimedMode && (
+                  <div className="flex-1 max-w-[200px] mx-12">
+                     <div className="h-2 w-full bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
+                        <div className={`h-full transition-all duration-1000 ${timeRemaining <= 5 ? 'bg-red-500 animate-pulse' : 'bg-slate-900 dark:bg-white'}`} style={{ width: `${(timeRemaining / 15) * 100}%` }}></div>
+                     </div>
+                  </div>
+                )}
+                <div className="text-sm font-bold uppercase tracking-widest text-slate-400">
+                   {currentQuestionIdx + 1} / {activeQuestions.length}
+                </div>
+             </div>
+
+             <div className="flex-1 animate-fade-in flex flex-col">
+                <h2 className="text-3xl font-medium mb-12 leading-snug">{activeQuestions[currentQuestionIdx]?.text}</h2>
+                <div className="grid grid-cols-1 gap-4">
+                   {activeQuestions[currentQuestionIdx]?.options.map((opt, i) => {
+                      const isSelected = quizAnswers[currentQuestionIdx] === i;
+                      const isCorrect = i === activeQuestions[currentQuestionIdx].correctAnswer;
+                      let styles = "border-slate-100 dark:border-slate-800 hover:border-slate-200";
+                      if (isShowingFeedback) {
+                        if (isCorrect) styles = "border-green-500 bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-300";
+                        else if (isSelected) styles = "border-red-500 bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-300";
+                        else styles = "opacity-40 border-slate-100 dark:border-slate-800";
+                      }
+                      return (
+                        <button key={i} onClick={() => handleAnswer(i)} className={`p-8 rounded-[32px] border-2 text-left transition-all font-medium text-lg flex items-center gap-6 ${styles}`}>
+                           <span className={`w-10 h-10 rounded-xl border flex items-center justify-center font-black ${isSelected ? 'bg-current border-transparent text-white' : 'border-slate-200 text-slate-300'}`}>{String.fromCharCode(65+i)}</span>
+                           {opt}
+                        </button>
+                      );
+                   })}
+                </div>
+                {isShowingFeedback && (
+                  <div className="mt-12 animate-fade-in">
+                     <div className="bg-slate-50 dark:bg-slate-900/50 p-8 rounded-[40px] border border-slate-100 dark:border-slate-800 mb-8">
+                        <h4 className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">The Why</h4>
+                        <p className="text-slate-600 dark:text-slate-400 leading-relaxed">{activeQuestions[currentQuestionIdx].explanation}</p>
+                     </div>
+                     <Button onClick={nextQuestion} className="w-full py-5 rounded-[24px]">Continue <span className="material-icons-round">arrow_forward</span></Button>
+                  </div>
+                )}
+             </div>
+          </div>
+        )}
+
+        {dojoMode === 'results' && (
+          <div className="max-w-xl mx-auto py-12 text-center h-full flex flex-col justify-center">
+             <div className="w-32 h-32 aurora-vibrant rounded-full flex items-center justify-center mx-auto mb-10 shadow-glow text-white">
+                <span className="material-icons-round text-6xl">emoji_events</span>
+             </div>
+             <h2 className="text-4xl font-medium mb-3">Excellent Session!</h2>
+             <p className="text-slate-500 mb-12">Your design fundamentals are getting stronger.</p>
+             <div className="grid grid-cols-2 gap-6 mb-12">
+                <div className="bg-white dark:bg-slate-900 p-8 rounded-[40px] border border-slate-100 dark:border-slate-800">
+                   <div className="text-xs font-bold uppercase tracking-widest text-slate-400 mb-2">Final Score</div>
+                   <div className="text-5xl font-black">{quizScore}</div>
+                </div>
+                <div className="bg-white dark:bg-slate-900 p-8 rounded-[40px] border border-slate-100 dark:border-slate-800">
+                   <div className="text-xs font-bold uppercase tracking-widest text-slate-400 mb-2">Accuracy</div>
+                   <div className="text-5xl font-black">{Math.round((quizAnswers.filter((a,i) => a === activeQuestions[i].correctAnswer).length / activeQuestions.length) * 100)}%</div>
+                </div>
+             </div>
+             <Button onClick={() => setDojoMode('hub')} className="w-full py-5 rounded-[24px]">Back to Hub</Button>
+          </div>
+        )}
+      </div>
+
+      {/* Right Panel: Daily Leaderboard (Inspiration Replicated) */}
+      <div className="w-full lg:w-[450px] bg-white dark:bg-slate-900 border-l border-slate-100 dark:border-slate-800 p-12 overflow-y-auto flex flex-col">
+          <div className="mb-12">
+             <div className="text-6xl font-black text-slate-900 dark:text-white mb-2">598.2K</div>
+             <div className="flex items-center justify-between text-slate-400 text-sm font-bold uppercase tracking-widest">
+                <span>Contributions</span>
+                <span>992 Designers</span>
+             </div>
+          </div>
+          
+          <div className="mb-12 p-8 rounded-[40px] bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+             <h4 className="text-[10px] font-black uppercase tracking-widest text-pink-500 mb-4 flex items-center gap-2">
+                <span className="material-icons-round text-sm">auto_awesome</span> Recognizing the Best! 🚀
+             </h4>
+             <p className="text-sm text-slate-500 leading-relaxed">Here, we celebrate the dedication and impact of our users as they climb the ranks through skill and achievement.</p>
+          </div>
+
+          <div className="flex-1 space-y-12">
+             {/* Top 3 Highlighting */}
+             <div className="flex justify-between items-end gap-2 px-4">
+                {leaderboard.slice(0, 3).map((entry, i) => {
+                  const ranks = [
+                    { h: 'h-40', color: 'from-amber-400 to-amber-600', label: 'Gold', icon: 'military_tech' },
+                    { h: 'h-48', color: 'from-slate-300 to-slate-500', label: 'Silver', icon: 'workspace_premium' }, // Centering the #1
+                    { h: 'h-36', color: 'from-orange-400 to-orange-600', label: 'Bronze', icon: 'stars' }
+                  ];
+                  // Adjusting index for visual order: 2, 1, 3
+                  const displayIdx = i === 0 ? 1 : i === 1 ? 0 : 2;
+                  const item = leaderboard[displayIdx];
+                  if (!item) return null;
+                  
+                  return (
+                    <div key={displayIdx} className="flex flex-col items-center flex-1">
+                       <div className="relative mb-4 group">
+                          <img src={item.avatar} className="w-16 h-16 rounded-full border-4 border-white dark:border-slate-800 shadow-xl" />
+                          <div className={`absolute -bottom-2 -right-2 w-8 h-8 rounded-full bg-gradient-to-br ${ranks[displayIdx].color} text-white flex items-center justify-center shadow-lg`}>
+                             <span className="material-icons-round text-lg">{ranks[displayIdx].icon}</span>
+                          </div>
+                       </div>
+                       <span className="text-xs font-bold truncate w-full text-center">{item.name}</span>
+                       <span className="text-[10px] text-slate-400 uppercase font-black">{item.score}</span>
+                    </div>
+                  );
+                })}
+             </div>
+
+             {/* List View */}
+             <div className="space-y-4">
+                <div className="flex justify-between text-[10px] font-black uppercase tracking-widest text-slate-400 px-4">
+                   <div className="flex gap-12">
+                      <span>Place</span>
+                      <span>Designer</span>
+                   </div>
+                   <span>All Time</span>
+                </div>
+                <div className="space-y-2">
+                   {leaderboard.map((entry, i) => (
+                     <div key={i} className={`flex items-center justify-between p-4 rounded-3xl transition-all ${i < 3 ? 'bg-slate-50/50 dark:bg-slate-800/30' : ''}`}>
+                        <div className="flex items-center gap-8">
+                           <span className="text-xs font-black text-slate-300 w-4">#{i+1}</span>
+                           <div className="flex items-center gap-3">
+                              <img src={entry.avatar} className="w-8 h-8 rounded-full border border-slate-100 dark:border-slate-700" />
+                              <span className="text-sm font-bold text-slate-900 dark:text-white truncate w-32">{entry.name}</span>
+                           </div>
+                        </div>
+                        <div className="flex items-center gap-4">
+                           <span className="text-sm font-black text-slate-900 dark:text-white">{(entry.score/1000).toFixed(1)}K</span>
+                           <span className="material-icons-round text-pink-500 text-lg">workspace_premium</span>
+                        </div>
+                     </div>
+                   ))}
+                </div>
+             </div>
+
+             {/* Your Position (Static Example) */}
+             <div className="mt-auto pt-12 border-t border-slate-100 dark:border-slate-800">
+                <div className="text-center">
+                   <h3 className="text-2xl font-bold mb-2">Join our community ;)</h3>
+                   <p className="text-slate-500 text-sm mb-6">discover top designers!</p>
+                   <Button className="w-full bg-slate-900 text-white rounded-2xl py-4">Get Started for free</Button>
+                </div>
+             </div>
+          </div>
       </div>
     </div>
   );
 
   const renderReview = () => (
     <div className="flex h-screen overflow-hidden bg-white dark:bg-slate-900 relative z-10 animate-fade-in">
-      {/* Left: AI Interaction */}
       <div className="w-full lg:w-[400px] flex flex-col border-r border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900 relative z-20 shadow-sm">
-        <div className="p-6 border-b border-slate-50 dark:border-slate-800 flex justify-between items-center bg-white/80 dark:bg-slate-900/80 backdrop-blur z-10">
+        <div className="p-6 border-b border-slate-50 dark:border-slate-800 flex justify-between items-center">
            <h3 className="font-medium text-slate-900 dark:text-white flex items-center gap-3">
-             <div className="w-8 h-8 rounded-full bg-gradient-to-br from-pink-100 to-purple-100 dark:from-purple-900 dark:to-pink-900 flex items-center justify-center text-purple-500 dark:text-purple-300">
+             <div className="w-8 h-8 rounded-full aurora-vibrant flex items-center justify-center text-white">
                 <span className="material-icons-round text-sm">auto_awesome</span>
              </div>
              Aura
            </h3>
-           <div className="flex gap-1">
-             <button 
-               onClick={() => pdfInputRef.current?.click()} 
-               className="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-xl transition-colors" 
-               title="Upload Project Context (PDF)"
-             >
-                <span className="material-icons-round text-xl">description</span>
-             </button>
-             <button onClick={handleExportReport} className="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-xl transition-colors" title="Export">
-                <span className="material-icons-round text-xl">download</span>
-             </button>
-           </div>
+           <Button variant="ghost" className="p-2" onClick={() => setScreen(Screen.DASHBOARD)}><span className="material-icons-round">close</span></Button>
         </div>
-        
-        {/* Chat History List */}
         <div className="flex-1 overflow-y-auto p-6 space-y-8">
-           {chatHistory.length === 0 && !isAnalyzing && (
-             <div className="text-center mt-10">
-                <p className="text-slate-400 text-sm font-normal">No conversation yet.</p>
-             </div>
-           )}
-
            {chatHistory.map((msg) => (
              <div key={msg.id} className={`flex flex-col gap-2 animate-fade-in ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
-               <div className={`
-                  rounded-2xl p-4 max-w-[90%] text-sm leading-relaxed whitespace-pre-wrap shadow-sm
-                  ${msg.role === 'model' 
-                    ? 'bg-white dark:bg-slate-800 border border-slate-100 dark:border-slate-700 text-slate-600 dark:text-slate-300 rounded-tl-none' 
-                    : 'bg-slate-900 dark:bg-purple-600 text-white rounded-tr-none shadow-lg shadow-slate-200 dark:shadow-none'}
-               `}>
+               <div className={`rounded-2xl p-4 max-w-[90%] text-sm leading-relaxed whitespace-pre-wrap shadow-sm ${msg.role === 'model' ? 'bg-white dark:bg-slate-800 border border-slate-100 dark:border-slate-700 text-slate-600 dark:text-slate-300 rounded-tl-none' : 'bg-slate-900 dark:bg-purple-600 text-white rounded-tr-none'}`}>
                   {msg.text}
                </div>
-               <span className="text-[10px] text-slate-400 px-1">
-                  {msg.role === 'model' ? 'Aura AI' : (userProfile?.name || 'You')}
-               </span>
              </div>
            ))}
-
-           {/* Typing Indicator */}
            {isAnalyzing && (
              <div className="flex items-center gap-3 mx-2 mb-4 p-3 rounded-2xl bg-white dark:bg-slate-800 border border-purple-100 dark:border-purple-900 shadow-sm w-fit animate-pulse">
-                <div className="relative w-5 h-5">
-                   <div className="absolute inset-0 rounded-full aurora-vibrant animate-spin blur-[1px]"></div>
-                   <div className="absolute inset-0.5 rounded-full bg-white dark:bg-slate-800"></div>
-                </div>
-                <span className="text-slate-700 dark:text-slate-300 text-xs font-bold tracking-wide bg-clip-text text-transparent bg-gradient-to-r from-purple-600 to-pink-600 dark:from-purple-400 dark:to-pink-400">
-                   Thinking...
-                </span>
+                <span className="text-xs font-bold tracking-wide bg-clip-text text-transparent bg-gradient-to-r from-purple-600 to-pink-600">Aura is thinking...</span>
              </div>
            )}
            <div ref={messagesEndRef} />
         </div>
-
-        {/* Input Area */}
-        <div className="p-6 bg-white dark:bg-slate-900 border-t border-slate-50 dark:border-slate-800">
-           <div className="flex gap-2 overflow-x-auto pb-4 scrollbar-hide">
-              <button 
-                onClick={handleQuickTip} 
-                className="flex items-center gap-2 px-4 py-2 bg-orange-50 dark:bg-orange-900/20 text-orange-600 dark:text-orange-400 rounded-xl text-xs font-medium hover:bg-orange-100 dark:hover:bg-orange-900/40 transition-colors whitespace-nowrap border border-orange-100 dark:border-orange-900/30"
-              >
-                 <span className="material-icons-round text-sm">lightbulb</span>
-                 Quick Tip
-              </button>
-           </div>
-
+        <div className="p-6 border-t border-slate-50 dark:border-slate-800">
            <div className="relative flex gap-3 items-center">
-              {/* Voice Mode Button */}
-              <button 
-                onClick={toggleLiveSession} 
-                className={`
-                  w-14 h-14 rounded-2xl flex items-center justify-center transition-all duration-500 flex-shrink-0
-                  ${isLiveConnected 
-                    ? "bg-pink-50 dark:bg-pink-900/20 text-pink-500 border border-pink-200 dark:border-pink-800 shadow-glow" 
-                    : "bg-slate-50 dark:bg-slate-800 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 border border-transparent"}
-                `}
-                title={isLiveConnected ? "Stop Voice Mode" : "Start Voice Mode"}
-              >
-                 <span className={`material-icons-round text-2xl ${isLiveConnected ? 'animate-pulse' : ''}`}>
-                   {isLiveConnected ? 'graphic_eq' : 'mic'}
-                 </span>
-              </button>
-              
-              {/* Image Upload for Chat Review */}
-              <button
-                onClick={() => chatImageInputRef.current?.click()}
-                className="w-14 h-14 rounded-2xl flex items-center justify-center bg-slate-50 dark:bg-slate-800 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 transition-all flex-shrink-0 border border-transparent"
-                title="Upload Image for Review"
-              >
+              <button onClick={() => chatImageInputRef.current?.click()} className="w-14 h-14 rounded-2xl flex items-center justify-center bg-slate-50 dark:bg-slate-800 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 transition-all">
                  <span className="material-icons-round text-2xl">add_photo_alternate</span>
               </button>
-
               <div className="flex-1 relative">
-                <input 
-                  type="text" 
-                  placeholder="Type your message..." 
-                  className="w-full bg-slate-50 dark:bg-slate-800 border-none rounded-2xl px-5 py-4 pr-12 text-sm focus:outline-none focus:ring-2 focus:ring-purple-50 dark:focus:ring-purple-900 text-slate-700 dark:text-slate-200 placeholder-slate-400 h-14"
-                  value={chatInput}
-                  onChange={(e) => setChatInput(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
-                />
-                <button 
-                  className={`absolute right-2 top-2 w-10 h-10 rounded-xl flex items-center justify-center text-purple-500 transition-all ${chatInput.trim() ? 'bg-white dark:bg-slate-700 shadow-sm text-purple-600 dark:text-purple-400' : 'opacity-0 pointer-events-none'}`}
-                  onClick={handleSendMessage}
-                >
-                    <span className="material-icons-round text-xl">arrow_upward</span>
-                </button>
+                <input type="text" placeholder="Type message..." className="w-full bg-slate-50 dark:bg-slate-800 border-none rounded-2xl px-5 py-4 text-sm focus:outline-none focus:ring-2 focus:ring-purple-50 h-14" value={chatInput} onChange={(e) => setChatInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()} />
+                <button className={`absolute right-2 top-2 w-10 h-10 rounded-xl flex items-center justify-center text-purple-500 ${chatInput.trim() ? 'opacity-100' : 'opacity-0'}`} onClick={handleSendMessage}><span className="material-icons-round text-xl">arrow_upward</span></button>
               </div>
            </div>
-           {isLiveConnected && (
-             <div className="text-center mt-3 text-[10px] text-pink-500 font-bold tracking-wider uppercase animate-pulse">
-               Live Interactive Mode Active
-             </div>
-           )}
         </div>
       </div>
 
-      {/* Right: Design Preview */}
-      <div className="flex-1 bg-[#FAFAFA] dark:bg-[#0B1120] relative flex flex-col overflow-hidden">
-         
-         {/* Vibrant Aurora Background Effect */}
-         {isAnalyzing && (
-            <div className="absolute inset-0 z-0 pointer-events-none overflow-hidden">
-                <div className="absolute inset-0 aurora-vibrant opacity-20 blur-3xl mix-blend-multiply dark:mix-blend-screen transform scale-110"></div>
-                <div className="absolute inset-0 bg-gradient-to-t from-white/50 via-transparent to-white/20 dark:from-slate-900/50 dark:to-slate-900/20"></div>
-            </div>
-         )}
-
-         <div className="absolute top-6 right-6 z-20 flex gap-2 bg-white dark:bg-slate-800 p-1.5 rounded-xl shadow-soft border border-slate-100 dark:border-slate-700">
-            <button className="w-8 h-8 flex items-center justify-center text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700 rounded-lg transition-colors"><span className="material-icons-round text-lg">remove</span></button>
-            <span className="w-12 flex items-center justify-center text-xs font-medium text-slate-600 dark:text-slate-300">100%</span>
-            <button className="w-8 h-8 flex items-center justify-center text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700 rounded-lg transition-colors"><span className="material-icons-round text-lg">add</span></button>
-         </div>
-
-         {/* Image Preview Container - Updated for robust centering */}
-         <div className="flex-1 overflow-auto p-8 relative z-10 flex">
-             <div className="m-auto relative max-w-full">
+      <div className="flex-1 bg-[#FAFAFA] dark:bg-[#0B1120] relative flex overflow-hidden">
+         <div className="flex items-center justify-center w-full h-full overflow-auto p-12">
+             <div className="m-auto relative flex flex-col items-center justify-center">
                 {(generatedImage || previewUrl) ? (
-                   <div className="w-full max-w-4xl relative shadow-2xl shadow-slate-200/50 dark:shadow-none rounded-2xl border-[6px] border-white dark:border-slate-700 bg-white dark:bg-slate-700 transition-all duration-500">
-                       {generatedImage && previewUrl ? (
-                         <ComparisonView original={previewUrl} generated={generatedImage} />
-                       ) : (
-                           <>
-                             <img 
-                               src={generatedImage || previewUrl || ""} 
-                               alt="Design Preview" 
-                               className="max-w-full max-h-[80vh] block rounded-lg mx-auto" 
-                             />
-                             {generatedImage && (
-                               <div className="absolute bottom-6 right-6 bg-white/80 text-slate-900 text-xs font-medium px-4 py-2 rounded-full backdrop-blur-md pointer-events-none shadow-sm border border-white">Generated</div>
-                             )}
-                             {/* Annotations Overlay */}
-                             {annotations.map((ann, idx) => (
-                               <div
-                                 key={idx}
-                                 className="absolute border-2 border-pink-500 rounded-lg group cursor-pointer hover:bg-pink-500/5 transition-all"
-                                 style={{
-                                   top: `${ann.box_2d[0]}%`,
-                                   left: `${ann.box_2d[1]}%`,
-                                   height: `${ann.box_2d[2] - ann.box_2d[0]}%`,
-                                   width: `${ann.box_2d[3] - ann.box_2d[1]}%`
-                                 }}
-                               >
-                                 <div className="absolute -top-3 -left-3 w-6 h-6 bg-pink-500 text-white rounded-full flex items-center justify-center text-xs font-bold shadow-lg scale-0 group-hover:scale-100 transition-transform duration-300">
-                                   {idx + 1}
-                                 </div>
-                                 <div className="absolute opacity-0 group-hover:opacity-100 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 text-xs p-4 rounded-2xl shadow-xl border border-slate-100 dark:border-slate-700 -bottom-2 left-1/2 transform -translate-x-1/2 translate-y-full w-64 z-20 transition-all duration-300 pointer-events-auto">
-                                    <p className="font-bold mb-1 text-pink-500 uppercase tracking-wider text-[10px]">{ann.label} <span className="opacity-50 ml-1">{ann.confidenceScore ? `(${ann.confidenceScore}%)` : ''}</span></p>
-                                    <p className="leading-relaxed font-normal">{ann.suggestion}</p>
-                                    <FeedbackButtons 
-                                      onRate={(rating, comment) => handleFeedback(idx, rating, comment)}
-                                      currentRating={ann.rating} 
-                                    />
-                                 </div>
-                               </div>
-                             ))}
-                           </>
-                       )}
+                   <div className="relative shadow-2xl rounded-2xl border-[6px] border-white dark:border-slate-700 bg-white dark:bg-slate-700">
+                       <img src={generatedImage || previewUrl || ""} alt="Preview" className="max-w-[85vw] max-h-[80vh] block rounded-lg mx-auto object-contain" />
+                       {annotations.map((ann, idx) => (
+                         <div key={idx} className="absolute border-2 border-pink-500 rounded-lg group cursor-pointer" style={{ top: `${ann.box_2d[0]}%`, left: `${ann.box_2d[1]}%`, height: `${ann.box_2d[2] - ann.box_2d[0]}%`, width: `${ann.box_2d[3] - ann.box_2d[1]}%` }}>
+                           <div className="absolute -top-3 -left-3 w-6 h-6 bg-pink-500 text-white rounded-full flex items-center justify-center text-xs font-bold">{idx + 1}</div>
+                         </div>
+                       ))}
                    </div>
-                ) : tokenInput ? (
-                  <div className="w-[600px] min-h-[400px] bg-white dark:bg-slate-800 rounded-[32px] shadow-soft border border-slate-100 dark:border-slate-700 p-10 relative">
-                     <div className="border border-dashed border-slate-200 dark:border-slate-700 h-full rounded-2xl flex items-center justify-center text-slate-300 dark:text-slate-600 flex-col gap-4">
-                        <span className="material-icons-round text-4xl opacity-50">code</span>
-                        <p className="text-sm font-normal text-slate-400">Token Interpretation View</p>
-                        <div className="max-w-xs text-[10px] font-mono text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-slate-900 p-3 rounded-xl opacity-60">
-                           {tokenInput.substring(0, 100)}...
-                        </div>
-                     </div>
-                  </div>
                 ) : (
-                   <div className="text-center opacity-40">
-                      <span className="material-icons-round text-6xl text-slate-300 dark:text-slate-600 mb-4">image</span>
-                      <h3 className="text-slate-500 dark:text-slate-400 font-normal">No Preview</h3>
-                   </div>
+                   <div className="text-center opacity-20"><span className="material-icons-round text-8xl mb-4">image</span><h3 className="text-2xl font-normal">No design active</h3></div>
                 )}
              </div>
          </div>
-         
-         <div className="bg-white dark:bg-slate-900 border-t border-slate-50 dark:border-slate-800 p-6 flex justify-between items-center relative z-10">
-            <div className="flex items-center gap-2">
-               <div className="w-2 h-2 rounded-full bg-green-400"></div>
-               <span className="text-xs text-slate-500 dark:text-slate-400 font-bold uppercase tracking-wider">Gemini 3 Pro Active</span>
+         {isAnalyzing && (
+            <div className="absolute bottom-6 right-6 z-30">
+               <Button variant="danger" icon="stop" onClick={() => setIsAnalyzing(false)}>Stop Analysis</Button>
             </div>
-            
-            {/* Stop Analysis Button */}
-            {isAnalyzing && (
-               <Button 
-                 variant="danger" 
-                 icon="stop_circle" 
-                 onClick={() => setIsAnalyzing(false)}
-                 className="animate-pulse"
-               >
-                 Stop Analysis
-               </Button>
-            )}
-         </div>
+         )}
       </div>
-      <input type="file" ref={pdfInputRef} className="hidden" accept="application/pdf" onChange={handlePdfUpload} />
-      <input type="file" ref={chatImageInputRef} className="hidden" accept="image/*" onChange={handleChatImageUpload} />
+      <input type="file" ref={chatImageInputRef} className="hidden" accept="image/*" onChange={handleFileUpload} />
     </div>
   );
 
   return (
     <div className="flex min-h-screen bg-white dark:bg-slate-900 text-slate-900 dark:text-white transition-colors duration-300">
       <AuroraBackground show={screen === Screen.DASHBOARD || screen === Screen.ONBOARDING || isAnalyzing} />
-      
       {screen !== Screen.ONBOARDING && (
-        <Sidebar 
-          currentScreen={screen} 
-          onNavigate={handleNavigate} 
-          onProfileClick={() => setScreen(Screen.SETTINGS)} 
-        />
+        <Sidebar currentScreen={screen} onNavigate={setScreen} onProfileClick={() => setScreen(Screen.SETTINGS)} />
       )}
-
       <main className="flex-1 relative z-10 h-screen overflow-hidden flex flex-col">
-        {screen === Screen.REVIEW ? (
-          renderReview() 
-        ) : screen === Screen.ONBOARDING ? (
-            renderOnboarding()
-        ) : (
-          <div className="flex-1 overflow-y-auto scrollbar-hide">
-             {screen === Screen.DASHBOARD && renderDashboard()}
-             {screen === Screen.TOKEN_INPUT && renderTokenInput()}
-             {screen === Screen.HISTORY && renderHistory()}
-             {screen === Screen.SETTINGS && renderSettings()}
-          </div>
-        )}
+        {screen === Screen.ONBOARDING ? renderOnboarding() :
+         screen === Screen.DOJO ? renderDojo() : 
+         screen === Screen.REVIEW ? renderReview() : 
+         screen === Screen.DASHBOARD ? (
+            <div className="max-w-6xl mx-auto pt-24 px-8 relative animate-fade-in h-full overflow-y-auto">
+              <header className="mb-20">
+                <h1 className="text-[4.5rem] leading-[1.1] tracking-tight font-medium mb-4">
+                  <span className="text-gradient-primary">Hello, {userProfile?.name || 'Designer'}</span>
+                </h1>
+                <p className="text-3xl text-slate-500 font-light">How can I assist you today?</p>
+              </header>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-8 pb-12">
+                <ModernCard title="Design Quizzes" description="Master typography, accessibility and layout through fast quizzes." icon="school" color="pink" onClick={() => { setScreen(Screen.DOJO); setDojoMode('hub'); }} />
+                <ModernCard title="Audit Design" description="Upload frames for instant visual suggestions and AI grounding." icon="image_search" color="purple" onClick={() => setScreen(Screen.TOKEN_INPUT)} />
+                <ModernCard title="Token Review" description="Paste Figma tokens for a deep UX and accessibility audit." icon="code" color="blue" onClick={() => setScreen(Screen.TOKEN_INPUT)} />
+              </div>
+            </div>
+         ) : screen === Screen.TOKEN_INPUT ? (
+            <div className="max-w-4xl mx-auto pt-20 px-8 h-full flex flex-col justify-center animate-fade-in">
+               <div className="bg-white dark:bg-slate-800 rounded-[40px] p-10 border border-slate-100 dark:border-slate-700 shadow-xl">
+                  <h2 className="text-3xl font-medium mb-2">New Review Session</h2>
+                  <p className="text-slate-500 mb-8">Paste your design code or upload a frame to get started.</p>
+                  <textarea className="w-full h-48 bg-slate-50 dark:bg-slate-900 border border-slate-100 dark:border-slate-700 rounded-2xl p-5 mb-6" placeholder='Paste design tokens or code here...' value={tokenInput} onChange={(e) => setTokenInput(e.target.value)}></textarea>
+                  <div className="flex gap-4">
+                     <Button className="flex-1 py-4 text-lg" onClick={async () => {
+                        if (!tokenInput.trim()) return;
+                        setIsAnalyzing(true);
+                        setScreen(Screen.REVIEW);
+                        const result = await analyzeDesignToken(tokenInput);
+                        setChatHistory([{ id: uuid(), role: 'model', text: result, timestamp: new Date() }]);
+                        setIsAnalyzing(false);
+                      }}>Analyze Code</Button>
+                     <input type="file" id="f-u-main" className="hidden" accept="image/*" onChange={handleFileUpload} />
+                     <label htmlFor="f-u-main" className="w-16 h-14 border border-slate-200 dark:border-slate-700 rounded-2xl flex items-center justify-center cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800 transition-all"><span className="material-icons-round text-2xl">image</span></label>
+                  </div>
+               </div>
+               <Button variant="ghost" className="mt-8 self-center" onClick={() => setScreen(Screen.DASHBOARD)}>Cancel</Button>
+            </div>
+         ) : screen === Screen.HISTORY ? (
+            <div className="max-w-6xl mx-auto pt-20 px-8 pb-12 relative animate-fade-in h-full overflow-y-auto">
+               <h1 className="text-4xl font-medium mb-12">Recent Audits</h1>
+               {sessions.length === 0 ? (
+                 <div className="text-center py-20 opacity-30"><span className="material-icons-round text-6xl mb-4">history_toggle_off</span><p>No history yet.</p></div>
+               ) : (
+                 <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+                    {sessions.map(s => (
+                       <div key={s.id} onClick={() => { setScreen(Screen.REVIEW); setPreviewUrl(s.content); setChatHistory(s.chatHistory); setAnnotations(s.annotations); }} className="bg-white dark:bg-slate-800 rounded-[32px] border border-slate-100 dark:border-slate-700 overflow-hidden cursor-pointer hover:shadow-xl transition-all group">
+                          <div className="h-40 bg-slate-50 dark:bg-slate-900 flex items-center justify-center overflow-hidden">
+                             {s.thumbnail ? <img src={s.thumbnail} className="w-full h-full object-cover group-hover:scale-105" /> : <span className="material-icons-round text-4xl text-slate-200">code</span>}
+                          </div>
+                          <div className="p-6"><h3 className="font-medium truncate">{s.title}</h3><p className="text-xs text-slate-400 mt-2">{new Date(s.timestamp).toLocaleDateString()}</p></div>
+                       </div>
+                    ))}
+                 </div>
+               )}
+            </div>
+         ) : screen === Screen.SETTINGS ? (
+           <div className="max-w-2xl mx-auto pt-20 px-8 text-center animate-fade-in">
+              <h1 className="text-4xl font-medium mb-12">Settings</h1>
+              <Button variant="danger" onClick={handleLogout} className="w-full">Log Out & Reset Profile</Button>
+           </div>
+         ) : null}
       </main>
     </div>
   );

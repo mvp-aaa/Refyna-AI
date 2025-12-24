@@ -3,6 +3,7 @@ export enum Screen {
   DASHBOARD = 'DASHBOARD',
   TOKEN_INPUT = 'TOKEN_INPUT',
   REVIEW = 'REVIEW',
+  DOJO = 'DOJO',
   HISTORY = 'HISTORY',
   SETTINGS = 'SETTINGS',
   ONBOARDING = 'ONBOARDING'
@@ -63,4 +64,36 @@ export interface ReviewSession {
   title: string;
   chatHistory: ChatMessage[];
   annotations: Annotation[];
+}
+
+// --- Quiz Module Types ---
+
+export interface Question {
+  id: string;
+  type: 'multiple-choice' | 'comparison' | 'spot-mistake';
+  text: string;
+  options: string[];
+  correctAnswer: number;
+  explanation: string;
+  imageA?: string;
+  imageB?: string;
+}
+
+export interface QuizCategory {
+  id: string;
+  name: string;
+  description: string;
+  skills: string[];
+  difficulty: 'Beginner' | 'Intermediate' | 'Mixed';
+  icon: string;
+  color: 'blue' | 'purple' | 'pink' | 'orange' | 'green';
+}
+
+export interface LeaderboardEntry {
+  name: string;
+  score: number;
+  category: string;
+  timestamp: number;
+  rank?: number;
+  avatar?: string;
 }
