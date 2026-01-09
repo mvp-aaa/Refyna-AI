@@ -47,7 +47,7 @@ export const createChatSession = (initialContext: string): Chat => {
     model: 'gemini-3-pro-preview',
     config: {
       tools: [{ googleSearch: {} }],
-      systemInstruction: `You are Aura, a world-class senior UI/UX designer. 
+      systemInstruction: `You are Refyna, a world-class senior UI/UX designer. 
       You are currently reviewing a design provided by the user. 
       Context of the design: ${initialContext.substring(0, 2000)}.
       

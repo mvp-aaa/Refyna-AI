@@ -9,10 +9,24 @@ export enum Screen {
   ONBOARDING = 'ONBOARDING'
 }
 
+export interface UserActivity {
+  date: string; // ISO format YYYY-MM-DD
+  count: number;
+}
+
 export interface UserProfile {
   name: string;
   role: string;
   goal: string;
+  location?: string;
+  bio?: string;
+  joinedDate?: string;
+  totalContributions: number;
+  rating: number;
+  projectsCount: number;
+  currentStreak: number;
+  longestStreak: number;
+  activityLog: Record<string, number>; // date string -> count
 }
 
 export interface DesignToken {
@@ -94,6 +108,4 @@ export interface LeaderboardEntry {
   score: number;
   category: string;
   timestamp: number;
-  rank?: number;
-  avatar?: string;
 }
