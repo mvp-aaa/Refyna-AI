@@ -1,4 +1,3 @@
-
 import { GoogleGenAI, LiveServerMessage, Modality } from "@google/genai";
 
 // Types for audio processing
@@ -100,7 +99,7 @@ export class LiveSessionManager {
         model: 'gemini-2.5-flash-native-audio-preview-09-2025',
         config: {
           responseModalities: [Modality.AUDIO],
-          systemInstruction: "You are a senior UI/UX designer assistant named Refyna. You are helpful, concise, and focus on visual design, accessibility, and modern aesthetics. Keep responses brief and conversational. When the user shares a design, assume you are looking at it and provide specific feedback on layout, color, and typography.",
+          systemInstruction: "You are a senior UI/UX designer assistant named Aura. You are helpful, concise, and focus on visual design, accessibility, and modern aesthetics. Keep responses brief and conversational. When the user shares a design, assume you are looking at it and provide specific feedback on layout, color, and typography.",
           speechConfig: {
             voiceConfig: { prebuiltVoiceConfig: { voiceName: voiceName } },
           },

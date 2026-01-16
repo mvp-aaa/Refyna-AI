@@ -4,9 +4,9 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="https://fonts.gstatic.com/s/i/materialicons/audio_spark/v1/24px.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Refyna Design Assistant</title>
+    <title>Aura Design Assistant</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@200;300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@200;300;400;500;600&display=swap" rel="stylesheet">
     <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Outlined|Material+Icons+Round" rel="stylesheet">
     <script>
       tailwind.config = {
@@ -17,36 +17,22 @@
               sans: ['Inter', 'sans-serif'],
             },
             colors: {
-              primary: {
-                DEFAULT: '#0551BA',
-                50: '#eff6ff',
-                100: '#dbeafe',
-                200: '#bfdbfe',
-                300: '#93c5fd',
-                400: '#60a5fa',
-                500: '#0551BA',
-                600: '#04449c',
-                700: '#03377d',
-                800: '#022a5f',
-                900: '#011d41',
-              },
               aura: {
-                50: '#f0f7ff',
-                100: '#e0effe',
-                200: '#bae0fd',
-                300: '#7cc2fb',
-                400: '#38a1f8',
-                500: '#0551BA',
-                600: '#0477db',
-                700: '#035fad',
-                800: '#034f8d',
-                900: '#084275',
+                50: '#fdf2f8',
+                100: '#fce7f3',
+                200: '#fbcfe8',
+                300: '#f9a8d4',
+                400: '#f472b6',
+                500: '#ec4899',
+                600: '#db2777',
+                700: '#be185d',
+                800: '#9d174d',
+                900: '#831843',
               }
             },
             boxShadow: {
-              'soft': '0 2px 15px -3px rgba(0, 0, 0, 0.07), 0 4px 6px -2px rgba(0, 0, 0, 0.05)',
-              'glow': '0 0 20px rgba(5, 81, 186, 0.25)',
-              'card': '0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06)',
+              'soft': '0 4px 20px -2px rgba(0, 0, 0, 0.05)',
+              'glow': '0 0 25px rgba(236, 72, 153, 0.4)',
             },
             animation: {
               'aurora': 'aurora 8s ease infinite',
@@ -67,7 +53,7 @@
     <style>
       body {
         font-family: 'Inter', sans-serif;
-        background-color: #f8fafc;
+        background-color: #ffffff;
         color: #0f172a;
       }
       .dark body {
@@ -97,22 +83,16 @@
       }
       
       .aurora-vibrant {
-        background: linear-gradient(-45deg, #0551BA, #2B86C5, #784BA0, #0551BA);
+        background: linear-gradient(-45deg, #FF3CAC, #784BA0, #2B86C5, #2BD2FF);
         background-size: 300% 300%;
-        animation: aurora-move 5s ease infinite;
+        animation: aurora-move 3s ease infinite;
       }
 
       .text-gradient-primary {
-         background: linear-gradient(135deg, #0551BA 0%, #03377d 100%);
+         background: linear-gradient(135deg, #6366f1 0%, #db2777 100%);
          -webkit-background-clip: text;
          -webkit-text-fill-color: transparent;
          background-clip: text;
-      }
-
-      .contribution-grid {
-        display: grid;
-        grid-template-columns: repeat(53, 1fr);
-        gap: 3px;
       }
     </style>
   <script type="importmap">
